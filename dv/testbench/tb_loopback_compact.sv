@@ -120,7 +120,7 @@ module tb_loopback_compact;
 
     // VCD
     initial begin
-        $dumpfile("D:/python work/rtl-ddd_reorder/dv/testbench/wave_loopback_compact.vcd");
+        $dumpfile("/mnt/c/python_work/realtek_pc/PIF_schedule_reorder/wave_loopback_compact.vcd");
         $dumpvars(0, tb_loopback_compact);
     end
 

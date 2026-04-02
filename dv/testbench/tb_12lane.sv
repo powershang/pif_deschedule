@@ -74,7 +74,7 @@ module tb_12lane;
 
     // VCD dump
     initial begin
-        $dumpfile("D:/python work/rtl-ddd_reorder/dv/testbench/wave_12lane_desched.vcd");
+        $dumpfile("/mnt/c/python_work/realtek_pc/PIF_schedule_reorder/wave_12lane_desched.vcd");
         $dumpvars(0, tb_12lane);
     end
 

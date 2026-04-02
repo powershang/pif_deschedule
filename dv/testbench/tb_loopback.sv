@@ -101,7 +101,7 @@ module tb_loopback;
 
     // VCD
     initial begin
-        $dumpfile("D:/python work/rtl-ddd_reorder/dv/testbench/wave_loopback.vcd");
+        $dumpfile("/mnt/c/python_work/realtek_pc/PIF_schedule_reorder/wave_loopback.vcd");
         $dumpvars(0, tb_loopback);
     end
 

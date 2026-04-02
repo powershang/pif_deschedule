@@ -55,7 +55,7 @@ module tb_8lane;
     end
 
     initial begin
-        $dumpfile("D:/python work/rtl-ddd_reorder/dv/testbench/wave_8lane_desched.vcd");
+        $dumpfile("/mnt/c/python_work/realtek_pc/PIF_schedule_reorder/wave_8lane_desched.vcd");
         $dumpvars(0, tb_8lane);
     end
 

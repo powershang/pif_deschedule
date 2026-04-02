@@ -48,7 +48,7 @@ module tb_4lane;
     always #(CLK_HALF) clk = ~clk;
 
     initial begin
-        $dumpfile("D:/python work/rtl-ddd_reorder/dv/testbench/wave_4lane_desched.vcd");
+        $dumpfile("/mnt/c/python_work/realtek_pc/PIF_schedule_reorder/wave_4lane_desched.vcd");
         $dumpvars(0, tb_4lane);
     end
 
