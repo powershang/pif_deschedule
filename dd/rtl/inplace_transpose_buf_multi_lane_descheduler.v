@@ -35,12 +35,12 @@ module inplace_transpose_buf_multi_lane_descheduler (
     localparam [1:0] MODE_12L = 2'b10;
     localparam [1:0] MODE_16L = 2'b11;
 
-    // clk_in domain
+    // Shared declarations (each block reads pre-clock values)
     reg [2:0]  in_state;
     reg [2:0]  in_phase;
+    reg        valid_in_d1;
     reg        in_cycle_odd_cnt;
     reg        in_cycle_odd_latch;
-    reg        valid_in_d1;
 
     reg [DATA_W-1:0] col_p0_0, col_p0_1, col_p0_2, col_p0_3;
     reg [DATA_W-1:0] col_p1_0, col_p1_1, col_p1_2, col_p1_3;
@@ -65,95 +65,145 @@ module inplace_transpose_buf_multi_lane_descheduler (
         endcase
     end
 
+    // =========================================================================
+    // clk_in block 1: valid_in_d1
+    // =========================================================================
     always @(posedge clk_in or negedge rst_n) begin
         if (!rst_n) valid_in_d1 <= 1'b0;
         else        valid_in_d1 <= valid_in;
     end
 
+    // =========================================================================
+    // clk_in block 2: odd/even tracking
+    // =========================================================================
     always @(posedge clk_in or negedge rst_n) begin
         if (!rst_n) begin
-            in_state           <= IDLE;
-            in_phase           <= 3'd0;
             in_cycle_odd_cnt   <= 1'b0;
             in_cycle_odd_latch <= 1'b0;
-            col_done_toggle    <= 1'b0;
+        end else if (in_state == IDLE && valid_in) begin
+            if (valid_in & ~valid_in_d1) begin
+                in_cycle_odd_latch <= 1'b0;
+                in_cycle_odd_cnt   <= 1'b1;
+            end else begin
+                in_cycle_odd_latch <= in_cycle_odd_cnt;
+                in_cycle_odd_cnt   <= ~in_cycle_odd_cnt;
+            end
+        end
+    end
+
+    // =========================================================================
+    // clk_in block 3: FSM — in_state, in_phase
+    // =========================================================================
+    always @(posedge clk_in or negedge rst_n) begin
+        if (!rst_n) begin
+            in_state <= IDLE;
+            in_phase <= 3'd0;
+        end else if (in_state != IDLE) begin
+            if (!valid_in) begin
+                // Abort
+                in_state <= IDLE;
+                in_phase <= 3'd0;
+            end else if (in_phase == phase_max) begin
+                // Complete
+                in_state <= IDLE;
+                in_phase <= 3'd0;
+            end else begin
+                in_phase <= in_phase + 3'd1;
+            end
+        end else if (valid_in) begin
+            case (lane_mode)
+                MODE_4L:  begin in_state <= IDLE;        in_phase <= 3'd0; end
+                MODE_8L:  begin in_state <= COLLECT_8L;  in_phase <= 3'd1; end
+                MODE_12L: begin in_state <= COLLECT_12L; in_phase <= 3'd1; end
+                MODE_16L: begin in_state <= COLLECT_16L; in_phase <= 3'd1; end
+                default:  begin in_state <= IDLE;        in_phase <= 3'd0; end
+            endcase
+        end
+    end
+
+    // =========================================================================
+    // clk_in block 4: Collection buffers — col_p0..3
+    // =========================================================================
+    always @(posedge clk_in or negedge rst_n) begin
+        if (!rst_n) begin
             col_p0_0 <= 0; col_p0_1 <= 0; col_p0_2 <= 0; col_p0_3 <= 0;
             col_p1_0 <= 0; col_p1_1 <= 0; col_p1_2 <= 0; col_p1_3 <= 0;
             col_p2_0 <= 0; col_p2_1 <= 0; col_p2_2 <= 0; col_p2_3 <= 0;
             col_p3_0 <= 0; col_p3_1 <= 0; col_p3_2 <= 0; col_p3_3 <= 0;
-            hold_p0_0 <= 0; hold_p0_1 <= 0; hold_p0_2 <= 0; hold_p0_3 <= 0;
-            hold_p1_0 <= 0; hold_p1_1 <= 0; hold_p1_2 <= 0; hold_p1_3 <= 0;
-            hold_p2_0 <= 0; hold_p2_1 <= 0; hold_p2_2 <= 0; hold_p2_3 <= 0;
-            hold_p3_0 <= 0; hold_p3_1 <= 0; hold_p3_2 <= 0; hold_p3_3 <= 0;
-            hold_cycle_odd <= 1'b0;
         end else begin
-            if (in_state != IDLE) begin
-                if (!valid_in) begin
-                    // valid_in dropped mid-collection: abort, discard partial data
-                    in_state <= IDLE;
-                    in_phase <= 3'd0;
-                end else begin
-                    case (in_phase)
-                        3'd1: begin col_p1_0<=din0; col_p1_1<=din1; col_p1_2<=din2; col_p1_3<=din3; end
-                        3'd2: begin col_p2_0<=din0; col_p2_1<=din1; col_p2_2<=din2; col_p2_3<=din3; end
-                        3'd3: begin col_p3_0<=din0; col_p3_1<=din1; col_p3_2<=din2; col_p3_3<=din3; end
-                        default: ;
-                    endcase
-                    if (in_phase == phase_max) begin
-                        in_state <= IDLE;
-                        in_phase <= 3'd0;
-                        col_done_toggle <= ~col_done_toggle;
-                        hold_cycle_odd  <= in_cycle_odd_latch;
-                        hold_p0_0<=col_p0_0; hold_p0_1<=col_p0_1; hold_p0_2<=col_p0_2; hold_p0_3<=col_p0_3;
-                        case (in_state)
-                            COLLECT_8L: begin
-                                hold_p1_0<=din0; hold_p1_1<=din1; hold_p1_2<=din2; hold_p1_3<=din3;
-                            end
-                            COLLECT_12L: begin
-                                hold_p1_0<=col_p1_0; hold_p1_1<=col_p1_1; hold_p1_2<=col_p1_2; hold_p1_3<=col_p1_3;
-                                hold_p2_0<=din0; hold_p2_1<=din1; hold_p2_2<=din2; hold_p2_3<=din3;
-                            end
-                            COLLECT_16L: begin
-                                hold_p1_0<=col_p1_0; hold_p1_1<=col_p1_1; hold_p1_2<=col_p1_2; hold_p1_3<=col_p1_3;
-                                hold_p2_0<=col_p2_0; hold_p2_1<=col_p2_1; hold_p2_2<=col_p2_2; hold_p2_3<=col_p2_3;
-                                hold_p3_0<=din0; hold_p3_1<=din1; hold_p3_2<=din2; hold_p3_3<=din3;
-                            end
-                            default: ;
-                        endcase
-                    end else begin
-                        in_phase <= in_phase + 3'd1;
-                    end
-                end
-            end else if (valid_in) begin
+            // Phase 0: at new window start
+            if (in_state == IDLE && valid_in) begin
                 col_p0_0 <= din0; col_p0_1 <= din1;
                 col_p0_2 <= din2; col_p0_3 <= din3;
-                if (valid_in & ~valid_in_d1) begin
-                    in_cycle_odd_latch <= 1'b0;
-                    in_cycle_odd_cnt   <= 1'b1;
-                end else begin
-                    in_cycle_odd_latch <= in_cycle_odd_cnt;
-                    in_cycle_odd_cnt   <= ~in_cycle_odd_cnt;
-                end
-                case (lane_mode)
-                    MODE_4L: begin
-                        in_state <= IDLE; in_phase <= 3'd0;
-                        col_done_toggle <= ~col_done_toggle;
-                        hold_p0_0<=din0; hold_p0_1<=din1; hold_p0_2<=din2; hold_p0_3<=din3;
-                        if (valid_in & ~valid_in_d1)
-                            hold_cycle_odd <= 1'b0;
-                        else
-                            hold_cycle_odd <= in_cycle_odd_cnt;
-                    end
-                    MODE_8L:  begin in_state <= COLLECT_8L;  in_phase <= 3'd1; end
-                    MODE_12L: begin in_state <= COLLECT_12L; in_phase <= 3'd1; end
-                    MODE_16L: begin in_state <= COLLECT_16L; in_phase <= 3'd1; end
-                    default:  begin in_state <= IDLE;        in_phase <= 3'd0; end
+            end
+            // Phase 1..3: during collection
+            if (in_state != IDLE && valid_in) begin
+                case (in_phase)
+                    3'd1: begin col_p1_0<=din0; col_p1_1<=din1; col_p1_2<=din2; col_p1_3<=din3; end
+                    3'd2: begin col_p2_0<=din0; col_p2_1<=din1; col_p2_2<=din2; col_p2_3<=din3; end
+                    3'd3: begin col_p3_0<=din0; col_p3_1<=din1; col_p3_2<=din2; col_p3_3<=din3; end
+                    default: ;
                 endcase
             end
         end
     end
 
-    // clk_out domain
+    // =========================================================================
+    // clk_in block 5: Hold buffer + toggle + hold_cycle_odd
+    // =========================================================================
+    always @(posedge clk_in or negedge rst_n) begin
+        if (!rst_n) begin
+            hold_p0_0 <= 0; hold_p0_1 <= 0; hold_p0_2 <= 0; hold_p0_3 <= 0;
+            hold_p1_0 <= 0; hold_p1_1 <= 0; hold_p1_2 <= 0; hold_p1_3 <= 0;
+            hold_p2_0 <= 0; hold_p2_1 <= 0; hold_p2_2 <= 0; hold_p2_3 <= 0;
+            hold_p3_0 <= 0; hold_p3_1 <= 0; hold_p3_2 <= 0; hold_p3_3 <= 0;
+            hold_cycle_odd  <= 1'b0;
+            col_done_toggle <= 1'b0;
+        end else begin
+            // 4L: immediate snapshot at new window
+            if (in_state == IDLE && valid_in && lane_mode == MODE_4L) begin
+                col_done_toggle <= ~col_done_toggle;
+                hold_p0_0 <= din0; hold_p0_1 <= din1;
+                hold_p0_2 <= din2; hold_p0_3 <= din3;
+                if (valid_in & ~valid_in_d1)
+                    hold_cycle_odd <= 1'b0;
+                else
+                    hold_cycle_odd <= in_cycle_odd_cnt;
+            end
+            // Multi-phase: snapshot when collection completes
+            if (in_state != IDLE && valid_in && in_phase == phase_max) begin
+                col_done_toggle <= ~col_done_toggle;
+                hold_cycle_odd  <= in_cycle_odd_latch;
+                hold_p0_0 <= col_p0_0; hold_p0_1 <= col_p0_1;
+                hold_p0_2 <= col_p0_2; hold_p0_3 <= col_p0_3;
+                case (in_state)
+                    COLLECT_8L: begin
+                        hold_p1_0<=din0; hold_p1_1<=din1;
+                        hold_p1_2<=din2; hold_p1_3<=din3;
+                    end
+                    COLLECT_12L: begin
+                        hold_p1_0<=col_p1_0; hold_p1_1<=col_p1_1;
+                        hold_p1_2<=col_p1_2; hold_p1_3<=col_p1_3;
+                        hold_p2_0<=din0; hold_p2_1<=din1;
+                        hold_p2_2<=din2; hold_p2_3<=din3;
+                    end
+                    COLLECT_16L: begin
+                        hold_p1_0<=col_p1_0; hold_p1_1<=col_p1_1;
+                        hold_p1_2<=col_p1_2; hold_p1_3<=col_p1_3;
+                        hold_p2_0<=col_p2_0; hold_p2_1<=col_p2_1;
+                        hold_p2_2<=col_p2_2; hold_p2_3<=col_p2_3;
+                        hold_p3_0<=din0; hold_p3_1<=din1;
+                        hold_p3_2<=din2; hold_p3_3<=din3;
+                    end
+                    default: ;
+                endcase
+            end
+        end
+    end
+
+    // =========================================================================
+    // clk_out domain: Toggle detection + De-rotation MUX + Output register
+    // =========================================================================
     reg        out_valid;
     reg        col_done_toggle_d;
     reg [DATA_W-1:0] out_a_top0, out_a_top1, out_a_top2, out_a_top3;
@@ -221,6 +271,9 @@ module inplace_transpose_buf_multi_lane_descheduler (
         end
     end
 
+    // =========================================================================
+    // Output assignments
+    // =========================================================================
     assign valid_out = out_valid;
     assign a_top0 = out_a_top0; assign a_top1 = out_a_top1;
     assign a_top2 = out_a_top2; assign a_top3 = out_a_top3;
