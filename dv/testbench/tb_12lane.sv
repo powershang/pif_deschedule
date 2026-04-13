@@ -6,16 +6,26 @@
 //   clk_in  period = 10ns  (100 MHz, fast clock)
 //   clk_out period = 30ns  (33 MHz, slow clock = clk_in / 3)
 //
-// Input stimulus: serialized 4-lane data as produced by the forward scheduler
-//   The forward scheduler for 12L outputs:
-//     even cycle: phase0=a_top, phase1=a_bot, phase2=b_top
-//     odd  cycle: phase0=b_top, phase1=a_top, phase2=a_bot
+// 12L mode: descheduler receives chunk-format serialized data (with rotation
+// on odd cycles) and outputs per-lane-per-cycle format (inverse transpose).
 //
-// Expected output: original pre-serialization data restored
-//   cycle 0 (even): a_top={10,11,12,13} a_bot={14,15,16,17} b_top={18,19,1a,1b}
-//   cycle 1 (odd):  a_top={20,21,22,23} a_bot={24,25,26,27} b_top={28,29,2a,2b}
-//   cycle 2 (even): a_top={30,31,32,33} a_bot={34,35,36,37} b_top={38,39,3a,3b}
-//   cycle 3 (odd):  a_top={40,41,42,43} a_bot={44,45,46,47} b_top={48,49,4a,4b}
+// Input stimulus (as produced by scheduler with 12L rotation):
+//   even cycle 0: phase0=a_top{10..13}, phase1=a_bot{14..17}, phase2=b_top{18..1b}
+//   odd  cycle 1: phase0=b_top{28..2b}, phase1=a_top{20..23}, phase2=a_bot{24..27}
+//   even cycle 2: phase0=a_top{30..33}, phase1=a_bot{34..37}, phase2=b_top{38..3b}
+//   odd  cycle 3: phase0=b_top{48..4b}, phase1=a_top{40..43}, phase2=a_bot{44..47}
+//
+// After de-rotation, the chunk data represents:
+//   slow0: Lane0[0..3], Lane4[0..3], Lane8[0..3]
+//   slow1: Lane1[0..3], Lane5[0..3], Lane9[0..3]
+//   slow2: Lane2[0..3], Lane6[0..3], Lane10[0..3]
+//   slow3: Lane3[0..3], Lane7[0..3], Lane11[0..3]
+//
+// Expected output (per-lane-per-cycle, inverse transpose):
+//   cycle0: a_top={L0[0],L1[0],L2[0],L3[0]} a_bot={L4[0],..} b_top={L8[0],..}
+//   cycle1: a_top={L0[1],L1[1],L2[1],L3[1]} ...
+//   cycle2: a_top={L0[2],L1[2],L2[2],L3[2]} ...
+//   cycle3: a_top={L0[3],L1[3],L2[3],L3[3]} ...
 //
 // VCD: wave_12lane_desched.vcd
 // =============================================================================
@@ -27,7 +37,7 @@ module tb_12lane;
     localparam DATA_W       = 8;
     localparam CLK_IN_HALF  = 5;    // 10ns period (fast)
     localparam CLK_OUT_HALF = 15;   // 30ns period (slow)
-    localparam SIM_END      = 600;
+    localparam SIM_END      = 900;
 
     // DUT signals
     logic                  clk_in, clk_out, rst_n;
@@ -74,7 +84,7 @@ module tb_12lane;
 
     // VCD dump
     initial begin
-        $dumpfile("/mnt/c/python_work/realtek_pc/PIF_schedule_reorder/wave_12lane_desched.vcd");
+        $dumpfile("wave_12lane_desched.vcd");
         $dumpvars(0, tb_12lane);
     end
 
@@ -90,13 +100,12 @@ module tb_12lane;
     end
 
     // -------------------------------------------------------------------------
-    // Stimulus: Feed serialized data as the forward scheduler would output
+    // Stimulus: Feed serialized data with 12L rotation
     //
-    // 12L forward output order:
-    //   cycle 0 (even): a_top{10..13}, a_bot{14..17}, b_top{18..1b}
-    //   cycle 1 (odd):  b_top{28..2b}, a_top{20..23}, a_bot{24..27}
-    //   cycle 2 (even): a_top{30..33}, a_bot{34..37}, b_top{38..3b}
-    //   cycle 3 (odd):  b_top{48..4b}, a_top{40..43}, a_bot{44..47}
+    // cycle 0 (even): a_top{10..13}, a_bot{14..17}, b_top{18..1b}
+    // cycle 1 (odd):  b_top{28..2b}, a_top{20..23}, a_bot{24..27}
+    // cycle 2 (even): a_top{30..33}, a_bot{34..37}, b_top{38..3b}
+    // cycle 3 (odd):  b_top{48..4b}, a_top{40..43}, a_bot{44..47}
     // -------------------------------------------------------------------------
     initial begin
         repeat(4) @(posedge clk_in);  // wait for reset
@@ -104,35 +113,35 @@ module tb_12lane;
         // --- cycle 0 (even): a_top, a_bot, b_top ---
         @(posedge clk_in);
         valid_in = 1;
-        din0 = 8'h10; din1 = 8'h11; din2 = 8'h12; din3 = 8'h13;  // a_top
+        din0 = 8'h10; din1 = 8'h11; din2 = 8'h12; din3 = 8'h13;  // a_top: Lane0[0..3]
         @(posedge clk_in);
-        din0 = 8'h14; din1 = 8'h15; din2 = 8'h16; din3 = 8'h17;  // a_bot
+        din0 = 8'h14; din1 = 8'h15; din2 = 8'h16; din3 = 8'h17;  // a_bot: Lane4[0..3]
         @(posedge clk_in);
-        din0 = 8'h18; din1 = 8'h19; din2 = 8'h1a; din3 = 8'h1b;  // b_top
+        din0 = 8'h18; din1 = 8'h19; din2 = 8'h1a; din3 = 8'h1b;  // b_top: Lane8[0..3]
 
-        // --- cycle 1 (odd): b_top, a_top, a_bot ---
+        // --- cycle 1 (odd): b_top, a_top, a_bot (rotated!) ---
         @(posedge clk_in);
-        din0 = 8'h28; din1 = 8'h29; din2 = 8'h2a; din3 = 8'h2b;  // b_top (rotated!)
+        din0 = 8'h28; din1 = 8'h29; din2 = 8'h2a; din3 = 8'h2b;  // b_top: Lane9[0..3]
         @(posedge clk_in);
-        din0 = 8'h20; din1 = 8'h21; din2 = 8'h22; din3 = 8'h23;  // a_top (rotated!)
+        din0 = 8'h20; din1 = 8'h21; din2 = 8'h22; din3 = 8'h23;  // a_top: Lane1[0..3]
         @(posedge clk_in);
-        din0 = 8'h24; din1 = 8'h25; din2 = 8'h26; din3 = 8'h27;  // a_bot (rotated!)
+        din0 = 8'h24; din1 = 8'h25; din2 = 8'h26; din3 = 8'h27;  // a_bot: Lane5[0..3]
 
         // --- cycle 2 (even): a_top, a_bot, b_top ---
         @(posedge clk_in);
-        din0 = 8'h30; din1 = 8'h31; din2 = 8'h32; din3 = 8'h33;  // a_top
+        din0 = 8'h30; din1 = 8'h31; din2 = 8'h32; din3 = 8'h33;  // a_top: Lane2[0..3]
         @(posedge clk_in);
-        din0 = 8'h34; din1 = 8'h35; din2 = 8'h36; din3 = 8'h37;  // a_bot
+        din0 = 8'h34; din1 = 8'h35; din2 = 8'h36; din3 = 8'h37;  // a_bot: Lane6[0..3]
         @(posedge clk_in);
-        din0 = 8'h38; din1 = 8'h39; din2 = 8'h3a; din3 = 8'h3b;  // b_top
+        din0 = 8'h38; din1 = 8'h39; din2 = 8'h3a; din3 = 8'h3b;  // b_top: Lane10[0..3]
 
-        // --- cycle 3 (odd): b_top, a_top, a_bot ---
+        // --- cycle 3 (odd): b_top, a_top, a_bot (rotated!) ---
         @(posedge clk_in);
-        din0 = 8'h48; din1 = 8'h49; din2 = 8'h4a; din3 = 8'h4b;  // b_top (rotated!)
+        din0 = 8'h48; din1 = 8'h49; din2 = 8'h4a; din3 = 8'h4b;  // b_top: Lane11[0..3]
         @(posedge clk_in);
-        din0 = 8'h40; din1 = 8'h41; din2 = 8'h42; din3 = 8'h43;  // a_top (rotated!)
+        din0 = 8'h40; din1 = 8'h41; din2 = 8'h42; din3 = 8'h43;  // a_top: Lane3[0..3]
         @(posedge clk_in);
-        din0 = 8'h44; din1 = 8'h45; din2 = 8'h46; din3 = 8'h47;  // a_bot (rotated!)
+        din0 = 8'h44; din1 = 8'h45; din2 = 8'h46; din3 = 8'h47;  // a_bot: Lane7[0..3]
 
         // De-assert
         @(posedge clk_in);
@@ -151,33 +160,11 @@ module tb_12lane;
     end
 
     // -------------------------------------------------------------------------
-    // Combinational reference (expected de-serialized output)
-    //
-    // Timing: valid_in starts at rclk_cnt=4 (after reset wait + 1 clk_in).
-    //   Collection takes 3 fast clocks, then collection_done_r pulses.
-    //   clk_out latches at the next slow posedge.
-    //
-    //   The expected wclk_cnt values depend on the exact alignment.
-    //   We use valid_out-based checking instead of fixed wclk_cnt.
+    // Auto-checker
     // -------------------------------------------------------------------------
-    logic                  ref_valid;
-    logic [DATA_W-1:0]     ref_a_top0, ref_a_top1, ref_a_top2, ref_a_top3;
-    logic [DATA_W-1:0]     ref_a_bot0, ref_a_bot1, ref_a_bot2, ref_a_bot3;
-    logic [DATA_W-1:0]     ref_b_top0, ref_b_top1, ref_b_top2, ref_b_top3;
-
-    // Use a queue-based checker: store expected outputs in order
     integer exp_idx;
     initial exp_idx = 0;
 
-    // Expected values (original pre-serialization data)
-    // cycle 0: a_top={10..13}, a_bot={14..17}, b_top={18..1b}
-    // cycle 1: a_top={20..23}, a_bot={24..27}, b_top={28..2b}
-    // cycle 2: a_top={30..33}, a_bot={34..37}, b_top={38..3b}
-    // cycle 3: a_top={40..43}, a_bot={44..47}, b_top={48..4b}
-
-    // -------------------------------------------------------------------------
-    // Auto-checker: triggers on valid_out
-    // -------------------------------------------------------------------------
     integer mismatch_cnt;
     integer check_cnt;
 
@@ -206,6 +193,11 @@ module tb_12lane;
         if (b_top3 !== e_bt3) begin $display("[MISMATCH] check#%0d b_top3=%0h exp=%0h", check_cnt, b_top3, e_bt3); mismatch_cnt = mismatch_cnt+1; end
     endtask
 
+    // Expected output: per-lane-per-cycle (inverse transpose)
+    // a_top = {Lane0[t], Lane1[t], Lane2[t], Lane3[t]}
+    // a_bot = {Lane4[t], Lane5[t], Lane6[t], Lane7[t]}
+    // b_top = {Lane8[t], Lane9[t], Lane10[t], Lane11[t]}
+    // b_bot = all 0 (12L only has 12 lanes)
     always @(posedge clk_out) begin
         if (rst_n && valid_out) begin
             $display("[DUT] wclk_cnt=%0d valid_out=1 a_top={%0h,%0h,%0h,%0h} a_bot={%0h,%0h,%0h,%0h} b_top={%0h,%0h,%0h,%0h}",
@@ -214,10 +206,11 @@ module tb_12lane;
                 b_top0, b_top1, b_top2, b_top3);
 
             case (exp_idx)
-                0: check_output(8'h10,8'h11,8'h12,8'h13, 8'h14,8'h15,8'h16,8'h17, 8'h18,8'h19,8'h1a,8'h1b);
-                1: check_output(8'h20,8'h21,8'h22,8'h23, 8'h24,8'h25,8'h26,8'h27, 8'h28,8'h29,8'h2a,8'h2b);
-                2: check_output(8'h30,8'h31,8'h32,8'h33, 8'h34,8'h35,8'h36,8'h37, 8'h38,8'h39,8'h3a,8'h3b);
-                3: check_output(8'h40,8'h41,8'h42,8'h43, 8'h44,8'h45,8'h46,8'h47, 8'h48,8'h49,8'h4a,8'h4b);
+                //                  a_top                    a_bot                    b_top
+                0: check_output(8'h10,8'h20,8'h30,8'h40, 8'h14,8'h24,8'h34,8'h44, 8'h18,8'h28,8'h38,8'h48);
+                1: check_output(8'h11,8'h21,8'h31,8'h41, 8'h15,8'h25,8'h35,8'h45, 8'h19,8'h29,8'h39,8'h49);
+                2: check_output(8'h12,8'h22,8'h32,8'h42, 8'h16,8'h26,8'h36,8'h46, 8'h1a,8'h2a,8'h3a,8'h4a);
+                3: check_output(8'h13,8'h23,8'h33,8'h43, 8'h17,8'h27,8'h37,8'h47, 8'h1b,8'h2b,8'h3b,8'h4b);
                 default: $display("[WARN] Unexpected valid_out at exp_idx=%0d", exp_idx);
             endcase
             exp_idx = exp_idx + 1;

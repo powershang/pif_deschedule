@@ -1,12 +1,19 @@
 // =============================================================================
 // Testbench: tb_loopback
-// Cascade: scheduler (N→4) → descheduler (4→N), verify identity
-// Tests all 4 modes sequentially: 16L, 12L, 8L, 4L
+// Cascade: scheduler (N→4) → descheduler (4→N with inverse transpose)
+// Tests 16L mode: verify descheduler produces per-lane-per-cycle output
 //
-// For each mode:
-//   1. Feed known data into scheduler
-//   2. Connect scheduler dout/valid_out to descheduler din/valid_in
-//   3. Verify descheduler output == scheduler original input
+// Scheduler input (chunk format, 4 slow cycles):
+//   slow0: a_top={10,11,12,13} a_bot={14,15,16,17} b_top={18,19,1a,1b} b_bot={1c,1d,1e,1f}
+//   slow1: a_top={20,21,22,23} a_bot={24,25,26,27} b_top={28,29,2a,2b} b_bot={2c,2d,2e,2f}
+//   slow2: a_top={30,31,32,33} a_bot={34,35,36,37} b_top={38,39,3a,3b} b_bot={3c,3d,3e,3f}
+//   slow3: a_top={40,41,42,43} a_bot={44,45,46,47} b_top={48,49,4a,4b} b_bot={4c,4d,4e,4f}
+//
+// Expected descheduler output (per-lane-per-cycle, inverse transpose):
+//   cycle0: a_top={10,20,30,40} a_bot={14,24,34,44} b_top={18,28,38,48} b_bot={1c,2c,3c,4c}
+//   cycle1: a_top={11,21,31,41} a_bot={15,25,35,45} b_top={19,29,39,49} b_bot={1d,2d,3d,4d}
+//   cycle2: a_top={12,22,32,42} a_bot={16,26,36,46} b_top={1a,2a,3a,4a} b_bot={1e,2e,3e,4e}
+//   cycle3: a_top={13,23,33,43} a_bot={17,27,37,47} b_top={1b,2b,3b,4b} b_bot={1f,2f,3f,4f}
 //
 // DATA_W=8 for easy readability
 // VCD: wave_loopback.vcd
@@ -86,12 +93,10 @@ module tb_loopback;
     always #(CLK_FAST_HALF) clk_fast = ~clk_fast;  // 10ns
 
     // =========================================================================
-    // Slow clock: generated dynamically based on lane_mode
-    // For loopback we drive it from the test program
+    // Slow clock: 16L mode, ratio 4:1 → 40ns period
     // =========================================================================
-    // We'll use a configurable slow clock
     integer slow_half;
-    initial slow_half = 5;  // default = same as fast (4L)
+    initial slow_half = 20;
 
     initial begin
         clk_slow = 0;
@@ -101,7 +106,7 @@ module tb_loopback;
 
     // VCD
     initial begin
-        $dumpfile("/mnt/c/python_work/realtek_pc/PIF_schedule_reorder/wave_loopback.vcd");
+        $dumpfile("wave_loopback.vcd");
         $dumpvars(0, tb_loopback);
     end
 
@@ -111,8 +116,7 @@ module tb_loopback;
     integer mismatch_cnt, check_cnt, exp_idx;
     integer total_mismatch, total_check;
 
-    // Expected input data storage (queue approach: store what we fed, compare later)
-    // We use exp_idx to track which output we're checking
+    // Expected output (per-lane-per-cycle, inverse transpose of scheduler input)
     logic [DATA_W-1:0] exp_a_top0[0:7], exp_a_top1[0:7], exp_a_top2[0:7], exp_a_top3[0:7];
     logic [DATA_W-1:0] exp_a_bot0[0:7], exp_a_bot1[0:7], exp_a_bot2[0:7], exp_a_bot3[0:7];
     logic [DATA_W-1:0] exp_b_top0[0:7], exp_b_top1[0:7], exp_b_top2[0:7], exp_b_top3[0:7];
@@ -150,10 +154,6 @@ module tb_loopback;
 
     // =========================================================================
     // Test: 16L loopback (slow_half=20 → 40ns period, ratio=4:1)
-    // Note: Because slow clock is generated with forever loop from time 0,
-    //       we cannot dynamically change slow_half mid-simulation.
-    //       So this testbench tests 16L mode only (most comprehensive).
-    //       The standalone tb_*lane tests cover other modes individually.
     // =========================================================================
     initial begin
         total_mismatch = 0;
@@ -173,32 +173,35 @@ module tb_loopback;
         {fwd_b_top0,fwd_b_top1,fwd_b_top2,fwd_b_top3} = '0;
         {fwd_b_bot0,fwd_b_bot1,fwd_b_bot2,fwd_b_bot3} = '0;
 
-        // Store expected data
-        exp_a_top0[0]=8'h10; exp_a_top1[0]=8'h11; exp_a_top2[0]=8'h12; exp_a_top3[0]=8'h13;
-        exp_a_bot0[0]=8'h14; exp_a_bot1[0]=8'h15; exp_a_bot2[0]=8'h16; exp_a_bot3[0]=8'h17;
-        exp_b_top0[0]=8'h18; exp_b_top1[0]=8'h19; exp_b_top2[0]=8'h1a; exp_b_top3[0]=8'h1b;
-        exp_b_bot0[0]=8'h1c; exp_b_bot1[0]=8'h1d; exp_b_bot2[0]=8'h1e; exp_b_bot3[0]=8'h1f;
+        // Expected: per-lane-per-cycle (inverse transpose of scheduler input)
+        // Scheduler input slow0..3 = Lane0..3 chunks per group
+        // Output cycle t: a_top={slow0.at[t], slow1.at[t], slow2.at[t], slow3.at[t]}
+        //                 (i.e., column t across all input rows)
+        exp_a_top0[0]=8'h10; exp_a_top1[0]=8'h20; exp_a_top2[0]=8'h30; exp_a_top3[0]=8'h40;
+        exp_a_bot0[0]=8'h14; exp_a_bot1[0]=8'h24; exp_a_bot2[0]=8'h34; exp_a_bot3[0]=8'h44;
+        exp_b_top0[0]=8'h18; exp_b_top1[0]=8'h28; exp_b_top2[0]=8'h38; exp_b_top3[0]=8'h48;
+        exp_b_bot0[0]=8'h1c; exp_b_bot1[0]=8'h2c; exp_b_bot2[0]=8'h3c; exp_b_bot3[0]=8'h4c;
 
-        exp_a_top0[1]=8'h20; exp_a_top1[1]=8'h21; exp_a_top2[1]=8'h22; exp_a_top3[1]=8'h23;
-        exp_a_bot0[1]=8'h24; exp_a_bot1[1]=8'h25; exp_a_bot2[1]=8'h26; exp_a_bot3[1]=8'h27;
-        exp_b_top0[1]=8'h28; exp_b_top1[1]=8'h29; exp_b_top2[1]=8'h2a; exp_b_top3[1]=8'h2b;
-        exp_b_bot0[1]=8'h2c; exp_b_bot1[1]=8'h2d; exp_b_bot2[1]=8'h2e; exp_b_bot3[1]=8'h2f;
+        exp_a_top0[1]=8'h11; exp_a_top1[1]=8'h21; exp_a_top2[1]=8'h31; exp_a_top3[1]=8'h41;
+        exp_a_bot0[1]=8'h15; exp_a_bot1[1]=8'h25; exp_a_bot2[1]=8'h35; exp_a_bot3[1]=8'h45;
+        exp_b_top0[1]=8'h19; exp_b_top1[1]=8'h29; exp_b_top2[1]=8'h39; exp_b_top3[1]=8'h49;
+        exp_b_bot0[1]=8'h1d; exp_b_bot1[1]=8'h2d; exp_b_bot2[1]=8'h3d; exp_b_bot3[1]=8'h4d;
 
-        exp_a_top0[2]=8'h30; exp_a_top1[2]=8'h31; exp_a_top2[2]=8'h32; exp_a_top3[2]=8'h33;
-        exp_a_bot0[2]=8'h34; exp_a_bot1[2]=8'h35; exp_a_bot2[2]=8'h36; exp_a_bot3[2]=8'h37;
-        exp_b_top0[2]=8'h38; exp_b_top1[2]=8'h39; exp_b_top2[2]=8'h3a; exp_b_top3[2]=8'h3b;
-        exp_b_bot0[2]=8'h3c; exp_b_bot1[2]=8'h3d; exp_b_bot2[2]=8'h3e; exp_b_bot3[2]=8'h3f;
+        exp_a_top0[2]=8'h12; exp_a_top1[2]=8'h22; exp_a_top2[2]=8'h32; exp_a_top3[2]=8'h42;
+        exp_a_bot0[2]=8'h16; exp_a_bot1[2]=8'h26; exp_a_bot2[2]=8'h36; exp_a_bot3[2]=8'h46;
+        exp_b_top0[2]=8'h1a; exp_b_top1[2]=8'h2a; exp_b_top2[2]=8'h3a; exp_b_top3[2]=8'h4a;
+        exp_b_bot0[2]=8'h1e; exp_b_bot1[2]=8'h2e; exp_b_bot2[2]=8'h3e; exp_b_bot3[2]=8'h4e;
 
-        exp_a_top0[3]=8'h40; exp_a_top1[3]=8'h41; exp_a_top2[3]=8'h42; exp_a_top3[3]=8'h43;
-        exp_a_bot0[3]=8'h44; exp_a_bot1[3]=8'h45; exp_a_bot2[3]=8'h46; exp_a_bot3[3]=8'h47;
-        exp_b_top0[3]=8'h48; exp_b_top1[3]=8'h49; exp_b_top2[3]=8'h4a; exp_b_top3[3]=8'h4b;
-        exp_b_bot0[3]=8'h4c; exp_b_bot1[3]=8'h4d; exp_b_bot2[3]=8'h4e; exp_b_bot3[3]=8'h4f;
+        exp_a_top0[3]=8'h13; exp_a_top1[3]=8'h23; exp_a_top2[3]=8'h33; exp_a_top3[3]=8'h43;
+        exp_a_bot0[3]=8'h17; exp_a_bot1[3]=8'h27; exp_a_bot2[3]=8'h37; exp_a_bot3[3]=8'h47;
+        exp_b_top0[3]=8'h1b; exp_b_top1[3]=8'h2b; exp_b_top2[3]=8'h3b; exp_b_top3[3]=8'h4b;
+        exp_b_bot0[3]=8'h1f; exp_b_bot1[3]=8'h2f; exp_b_bot2[3]=8'h3f; exp_b_bot3[3]=8'h4f;
 
         // Reset
         repeat(6) @(posedge clk_fast);
         rst_n = 1;
 
-        // Feed 4 cycles of 16L data into scheduler
+        // Feed 4 cycles of 16L data into scheduler (chunk format)
         @(posedge clk_slow);
         fwd_a_valid_in = 1; fwd_b_valid_in = 1;
         fwd_a_top0=8'h10; fwd_a_top1=8'h11; fwd_a_top2=8'h12; fwd_a_top3=8'h13;

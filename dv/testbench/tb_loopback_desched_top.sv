@@ -1,81 +1,40 @@
 // =============================================================================
 // Testbench: tb_loopback_desched_top
-// DUT chain: Scheduler → Descheduler_Top (desched + compactor)
+// End-to-end A-to-A verification:
+//   din[0:15] -> scheduler_top -> descheduler(Stage1) -> reverse_transpose -> CHECK
 //
-// Test matrix: 4 lane modes × 2 data patterns (PHY-like / VLANE-like) = 8 cases
-// Each case: 20 input pairs (40 slow cycles) → 20 compact outputs
+// Verifies that reverse_inplace_transpose output (BEFORE compactor) exactly
+// matches the original scheduler_top per-lane-per-cycle input.
 //
-// PHY pattern:  lane values are independent sequential per group
-// VLANE pattern: lane values are even/odd interleaved per group
+// No compactor in this testbench -- it is out of scope.
+//
+// Hierarchy:
+//   u_sched_top : scheduler_top       (din[0:15] -> dout[0:3])
+//   u_desched   : descheduler Stage1  (4-lane fast -> chunk output)
+//   u_rev_a     : reverse_transpose   (Group A: lanes 0-7)
+//   u_rev_b     : reverse_transpose   (Group B: lanes 8-15)
+//   checker     : compare rev outputs with stored din[0:15]
+//
+// Test matrix: 4 lane modes (4L, 8L, 12L, 16L), PHY mode only.
+// Each mode: 16 input cycles of per-lane-per-cycle data.
 // =============================================================================
 
 `timescale 1ns/1ps
 
 module tb_loopback_desched_top;
 
-    localparam DATA_W = 8;
+    localparam DATA_W        = 8;
     localparam CLK_FAST_HALF = 5;
-    localparam NUM_PAIRS = 20;
+    localparam NUM_CYCLES    = 24;
+    localparam MAX_CYCLES    = 32;   // storage depth per lane
 
     // =========================================================================
-    // Signals
+    // Clocks & reset
     // =========================================================================
     logic clk_fast, clk_slow;
-    logic                  rst_n;
-    logic [1:0]            lane_mode;
-    integer                slow_half;
+    logic rst_n;
+    integer slow_half;
 
-    logic                  fwd_a_valid_in, fwd_b_valid_in;
-    logic [DATA_W-1:0]     fwd_a_top0, fwd_a_top1, fwd_a_top2, fwd_a_top3;
-    logic [DATA_W-1:0]     fwd_a_bot0, fwd_a_bot1, fwd_a_bot2, fwd_a_bot3;
-    logic [DATA_W-1:0]     fwd_b_top0, fwd_b_top1, fwd_b_top2, fwd_b_top3;
-    logic [DATA_W-1:0]     fwd_b_bot0, fwd_b_bot1, fwd_b_bot2, fwd_b_bot3;
-    logic                  fwd_valid_out;
-    logic [DATA_W-1:0]     fwd_dout0, fwd_dout1, fwd_dout2, fwd_dout3;
-    logic [2:0]            fwd_dbg_state;
-    logic [3:0]            fwd_dbg_fifo_cnt;
-
-    logic                  cmp_valid_out;
-    logic [DATA_W-1:0]     cmp_a_top0, cmp_a_top1, cmp_a_top2, cmp_a_top3;
-    logic [DATA_W-1:0]     cmp_a_bot0, cmp_a_bot1, cmp_a_bot2, cmp_a_bot3;
-    logic [DATA_W-1:0]     cmp_b_top0, cmp_b_top1, cmp_b_top2, cmp_b_top3;
-    logic [DATA_W-1:0]     cmp_b_bot0, cmp_b_bot1, cmp_b_bot2, cmp_b_bot3;
-    logic [2:0]            rev_dbg_state;
-    logic [3:0]            rev_dbg_fifo_cnt;
-
-    // =========================================================================
-    // DUT chain
-    // =========================================================================
-    inplace_transpose_buf_multi_lane_scheduler #(.DATA_W(DATA_W)) u_fwd (
-        .clk_in(clk_slow), .clk_out(clk_fast), .rst_n(rst_n),
-        .lane_mode(lane_mode),
-        .a_valid_in(fwd_a_valid_in),
-        .a_top0(fwd_a_top0), .a_top1(fwd_a_top1), .a_top2(fwd_a_top2), .a_top3(fwd_a_top3),
-        .a_bot0(fwd_a_bot0), .a_bot1(fwd_a_bot1), .a_bot2(fwd_a_bot2), .a_bot3(fwd_a_bot3),
-        .b_valid_in(fwd_b_valid_in),
-        .b_top0(fwd_b_top0), .b_top1(fwd_b_top1), .b_top2(fwd_b_top2), .b_top3(fwd_b_top3),
-        .b_bot0(fwd_b_bot0), .b_bot1(fwd_b_bot1), .b_bot2(fwd_b_bot2), .b_bot3(fwd_b_bot3),
-        .valid_out(fwd_valid_out),
-        .dout0(fwd_dout0), .dout1(fwd_dout1), .dout2(fwd_dout2), .dout3(fwd_dout3),
-        .dbg_state(fwd_dbg_state), .dbg_fifo_cnt(fwd_dbg_fifo_cnt)
-    );
-
-    inplace_transpose_buf_multi_lane_descheduler_top #(.DATA_W(DATA_W)) u_dut (
-        .clk_in(clk_fast), .clk_out(clk_slow), .rst_n(rst_n),
-        .lane_mode(lane_mode),
-        .valid_in(fwd_valid_out),
-        .din0(fwd_dout0), .din1(fwd_dout1), .din2(fwd_dout2), .din3(fwd_dout3),
-        .valid_out(cmp_valid_out),
-        .a_top0(cmp_a_top0), .a_top1(cmp_a_top1), .a_top2(cmp_a_top2), .a_top3(cmp_a_top3),
-        .a_bot0(cmp_a_bot0), .a_bot1(cmp_a_bot1), .a_bot2(cmp_a_bot2), .a_bot3(cmp_a_bot3),
-        .b_top0(cmp_b_top0), .b_top1(cmp_b_top1), .b_top2(cmp_b_top2), .b_top3(cmp_b_top3),
-        .b_bot0(cmp_b_bot0), .b_bot1(cmp_b_bot1), .b_bot2(cmp_b_bot2), .b_bot3(cmp_b_bot3),
-        .dbg_state(rev_dbg_state), .dbg_fifo_cnt(rev_dbg_fifo_cnt)
-    );
-
-    // =========================================================================
-    // Clocks
-    // =========================================================================
     initial clk_fast = 0;
     always #(CLK_FAST_HALF) clk_fast = ~clk_fast;
 
@@ -86,45 +45,233 @@ module tb_loopback_desched_top;
         forever #(slow_half) clk_slow = ~clk_slow;
     end
 
+    // =========================================================================
+    // VCD dump
+    // =========================================================================
     initial begin
-        $dumpfile("/mnt/c/python_work/realtek_pc/PIF_schedule_reorder/wave_loopback_desched_top.vcd");
+        $dumpfile("wave_loopback_desched_top.vcd");
         $dumpvars(0, tb_loopback_desched_top);
     end
 
     // =========================================================================
-    // Expected storage + checker
+    // Signals
     // =========================================================================
-    localparam MAX_EXP = 64;
-    reg [DATA_W-1:0] e_at0[0:MAX_EXP-1], e_at1[0:MAX_EXP-1], e_at2[0:MAX_EXP-1], e_at3[0:MAX_EXP-1];
-    reg [DATA_W-1:0] e_ab0[0:MAX_EXP-1], e_ab1[0:MAX_EXP-1], e_ab2[0:MAX_EXP-1], e_ab3[0:MAX_EXP-1];
-    reg [DATA_W-1:0] e_bt0[0:MAX_EXP-1], e_bt1[0:MAX_EXP-1], e_bt2[0:MAX_EXP-1], e_bt3[0:MAX_EXP-1];
-    reg [DATA_W-1:0] e_bb0[0:MAX_EXP-1], e_bb1[0:MAX_EXP-1], e_bb2[0:MAX_EXP-1], e_bb3[0:MAX_EXP-1];
+    logic [1:0]        lane_mode;
+    logic              valid_in;
+    logic [DATA_W-1:0] din0,  din1,  din2,  din3;
+    logic [DATA_W-1:0] din4,  din5,  din6,  din7;
+    logic [DATA_W-1:0] din8,  din9,  din10, din11;
+    logic [DATA_W-1:0] din12, din13, din14, din15;
+    logic              align_error_flag;
 
-    integer mismatch_cnt, check_cnt, exp_idx, exp_total;
-    integer checking_en, is_drain_mode;
+    // scheduler_top -> descheduler
+    logic              sched_valid_out;
+    logic [DATA_W-1:0] sched_dout0, sched_dout1, sched_dout2, sched_dout3;
+    logic [2:0]        sched_dbg_state;
+    logic [3:0]        sched_dbg_fifo_cnt;
 
+    // descheduler -> reverse transpose
+    logic              ds_valid_out;
+    logic [DATA_W-1:0] ds_a_top0, ds_a_top1, ds_a_top2, ds_a_top3;
+    logic [DATA_W-1:0] ds_a_bot0, ds_a_bot1, ds_a_bot2, ds_a_bot3;
+    logic [DATA_W-1:0] ds_b_top0, ds_b_top1, ds_b_top2, ds_b_top3;
+    logic [DATA_W-1:0] ds_b_bot0, ds_b_bot1, ds_b_bot2, ds_b_bot3;
+    logic [2:0]        ds_dbg_state;
+    logic [3:0]        ds_dbg_fifo_cnt;
+
+    // reverse transpose Group A outputs
+    logic              rev_a_valid;
+    logic [DATA_W-1:0] rev_a_d0, rev_a_d1, rev_a_d2, rev_a_d3;
+    logic [DATA_W-1:0] rev_a_d4, rev_a_d5, rev_a_d6, rev_a_d7;
+
+    // reverse transpose Group B outputs
+    logic              rev_b_valid;
+    logic [DATA_W-1:0] rev_b_d0, rev_b_d1, rev_b_d2, rev_b_d3;
+    logic [DATA_W-1:0] rev_b_d4, rev_b_d5, rev_b_d6, rev_b_d7;
+
+    // lane_cfg for reverse transpose
+    wire rev_a_lane_cfg = (lane_mode == 2'b00) ? 1'b1 : 1'b0;  // LANE4 for 4L, LANE8 otherwise
+    wire rev_b_lane_cfg = (lane_mode == 2'b11) ? 1'b0 : 1'b1;  // LANE8 for 16L, LANE4 otherwise
+    wire rev_b_valid_in = ds_valid_out & lane_mode[1];           // only active for 12L/16L
+
+    // =========================================================================
+    // DUT: scheduler_top
+    // =========================================================================
+    inplace_transpose_buf_multi_lane_scheduler_top #(.DATA_W(DATA_W)) u_sched_top (
+        .clk_in(clk_slow), .clk_out(clk_fast), .rst_n(rst_n),
+        .valid_in(valid_in), .lane_mode(lane_mode), .virtual_lane_en(1'b0),
+        .din0(din0),   .din1(din1),   .din2(din2),   .din3(din3),
+        .din4(din4),   .din5(din5),   .din6(din6),   .din7(din7),
+        .din8(din8),   .din9(din9),   .din10(din10), .din11(din11),
+        .din12(din12), .din13(din13), .din14(din14), .din15(din15),
+        .align_error_flag(align_error_flag),
+        .valid_out(sched_valid_out),
+        .dout0(sched_dout0), .dout1(sched_dout1),
+        .dout2(sched_dout2), .dout3(sched_dout3),
+        .dbg_state(sched_dbg_state), .dbg_fifo_cnt(sched_dbg_fifo_cnt)
+    );
+
+    // =========================================================================
+    // DUT: descheduler Stage 1
+    // =========================================================================
+    inplace_transpose_buf_multi_lane_descheduler #(.DATA_W(DATA_W)) u_desched (
+        .clk_in(clk_fast), .clk_out(clk_slow), .rst_n(rst_n),
+        .lane_mode(lane_mode), .valid_in(sched_valid_out),
+        .din0(sched_dout0), .din1(sched_dout1),
+        .din2(sched_dout2), .din3(sched_dout3),
+        .valid_out(ds_valid_out),
+        .a_top0(ds_a_top0), .a_top1(ds_a_top1),
+        .a_top2(ds_a_top2), .a_top3(ds_a_top3),
+        .a_bot0(ds_a_bot0), .a_bot1(ds_a_bot1),
+        .a_bot2(ds_a_bot2), .a_bot3(ds_a_bot3),
+        .b_top0(ds_b_top0), .b_top1(ds_b_top1),
+        .b_top2(ds_b_top2), .b_top3(ds_b_top3),
+        .b_bot0(ds_b_bot0), .b_bot1(ds_b_bot1),
+        .b_bot2(ds_b_bot2), .b_bot3(ds_b_bot3),
+        .dbg_state(ds_dbg_state), .dbg_fifo_cnt(ds_dbg_fifo_cnt)
+    );
+
+    // =========================================================================
+    // DUT: reverse_inplace_transpose Group A (lanes 0-7)
+    // =========================================================================
+    reverse_inplace_transpose #(.DATA_W(DATA_W)) u_rev_a (
+        .clk(clk_slow), .rst_n(rst_n),
+        .lane_cfg(rev_a_lane_cfg), .valid_in(ds_valid_out),
+        .din_top0(ds_a_top0), .din_top1(ds_a_top1),
+        .din_top2(ds_a_top2), .din_top3(ds_a_top3),
+        .din_bot0(ds_a_bot0), .din_bot1(ds_a_bot1),
+        .din_bot2(ds_a_bot2), .din_bot3(ds_a_bot3),
+        .valid_out(rev_a_valid),
+        .dout0(rev_a_d0), .dout1(rev_a_d1), .dout2(rev_a_d2), .dout3(rev_a_d3),
+        .dout4(rev_a_d4), .dout5(rev_a_d5), .dout6(rev_a_d6), .dout7(rev_a_d7)
+    );
+
+    // =========================================================================
+    // DUT: reverse_inplace_transpose Group B (lanes 8-15)
+    // =========================================================================
+    reverse_inplace_transpose #(.DATA_W(DATA_W)) u_rev_b (
+        .clk(clk_slow), .rst_n(rst_n),
+        .lane_cfg(rev_b_lane_cfg), .valid_in(rev_b_valid_in),
+        .din_top0(ds_b_top0), .din_top1(ds_b_top1),
+        .din_top2(ds_b_top2), .din_top3(ds_b_top3),
+        .din_bot0(ds_b_bot0), .din_bot1(ds_b_bot1),
+        .din_bot2(ds_b_bot2), .din_bot3(ds_b_bot3),
+        .valid_out(rev_b_valid),
+        .dout0(rev_b_d0), .dout1(rev_b_d1), .dout2(rev_b_d2), .dout3(rev_b_d3),
+        .dout4(rev_b_d4), .dout5(rev_b_d5), .dout6(rev_b_d6), .dout7(rev_b_d7)
+    );
+
+    // =========================================================================
+    // Expected data storage: stored[lane][cycle]
+    // =========================================================================
+    reg [DATA_W-1:0] stored [0:15][0:MAX_CYCLES-1];
+
+    // =========================================================================
+    // Checker
+    // =========================================================================
+    integer out_idx_a, out_idx_b;
+    integer mismatch_cnt;
+    integer check_cnt_a, check_cnt_b;
+    integer checking_en;
+    integer latency_skip_a, latency_skip_b;  // skip first output (9T pipeline fill)
+
+    // Group A checker: rev_a outputs -> din lanes 0-7
     always @(posedge clk_slow) begin
-        if (rst_n && checking_en && cmp_valid_out) begin
-            if (!is_drain_mode && exp_idx < exp_total) begin
-                if (cmp_a_top0!==e_at0[exp_idx]) begin $display("  [MISMATCH] #%0d a_top0 got=%0h exp=%0h",exp_idx,cmp_a_top0,e_at0[exp_idx]); mismatch_cnt=mismatch_cnt+1; end
-                if (cmp_a_top1!==e_at1[exp_idx]) begin $display("  [MISMATCH] #%0d a_top1 got=%0h exp=%0h",exp_idx,cmp_a_top1,e_at1[exp_idx]); mismatch_cnt=mismatch_cnt+1; end
-                if (cmp_a_top2!==e_at2[exp_idx]) begin $display("  [MISMATCH] #%0d a_top2 got=%0h exp=%0h",exp_idx,cmp_a_top2,e_at2[exp_idx]); mismatch_cnt=mismatch_cnt+1; end
-                if (cmp_a_top3!==e_at3[exp_idx]) begin $display("  [MISMATCH] #%0d a_top3 got=%0h exp=%0h",exp_idx,cmp_a_top3,e_at3[exp_idx]); mismatch_cnt=mismatch_cnt+1; end
-                if (cmp_a_bot0!==e_ab0[exp_idx]) begin $display("  [MISMATCH] #%0d a_bot0 got=%0h exp=%0h",exp_idx,cmp_a_bot0,e_ab0[exp_idx]); mismatch_cnt=mismatch_cnt+1; end
-                if (cmp_a_bot1!==e_ab1[exp_idx]) begin $display("  [MISMATCH] #%0d a_bot1 got=%0h exp=%0h",exp_idx,cmp_a_bot1,e_ab1[exp_idx]); mismatch_cnt=mismatch_cnt+1; end
-                if (cmp_a_bot2!==e_ab2[exp_idx]) begin $display("  [MISMATCH] #%0d a_bot2 got=%0h exp=%0h",exp_idx,cmp_a_bot2,e_ab2[exp_idx]); mismatch_cnt=mismatch_cnt+1; end
-                if (cmp_a_bot3!==e_ab3[exp_idx]) begin $display("  [MISMATCH] #%0d a_bot3 got=%0h exp=%0h",exp_idx,cmp_a_bot3,e_ab3[exp_idx]); mismatch_cnt=mismatch_cnt+1; end
-                if (cmp_b_top0!==e_bt0[exp_idx]) begin $display("  [MISMATCH] #%0d b_top0 got=%0h exp=%0h",exp_idx,cmp_b_top0,e_bt0[exp_idx]); mismatch_cnt=mismatch_cnt+1; end
-                if (cmp_b_top1!==e_bt1[exp_idx]) begin $display("  [MISMATCH] #%0d b_top1 got=%0h exp=%0h",exp_idx,cmp_b_top1,e_bt1[exp_idx]); mismatch_cnt=mismatch_cnt+1; end
-                if (cmp_b_top2!==e_bt2[exp_idx]) begin $display("  [MISMATCH] #%0d b_top2 got=%0h exp=%0h",exp_idx,cmp_b_top2,e_bt2[exp_idx]); mismatch_cnt=mismatch_cnt+1; end
-                if (cmp_b_top3!==e_bt3[exp_idx]) begin $display("  [MISMATCH] #%0d b_top3 got=%0h exp=%0h",exp_idx,cmp_b_top3,e_bt3[exp_idx]); mismatch_cnt=mismatch_cnt+1; end
-                if (cmp_b_bot0!==e_bb0[exp_idx]) begin $display("  [MISMATCH] #%0d b_bot0 got=%0h exp=%0h",exp_idx,cmp_b_bot0,e_bb0[exp_idx]); mismatch_cnt=mismatch_cnt+1; end
-                if (cmp_b_bot1!==e_bb1[exp_idx]) begin $display("  [MISMATCH] #%0d b_bot1 got=%0h exp=%0h",exp_idx,cmp_b_bot1,e_bb1[exp_idx]); mismatch_cnt=mismatch_cnt+1; end
-                if (cmp_b_bot2!==e_bb2[exp_idx]) begin $display("  [MISMATCH] #%0d b_bot2 got=%0h exp=%0h",exp_idx,cmp_b_bot2,e_bb2[exp_idx]); mismatch_cnt=mismatch_cnt+1; end
-                if (cmp_b_bot3!==e_bb3[exp_idx]) begin $display("  [MISMATCH] #%0d b_bot3 got=%0h exp=%0h",exp_idx,cmp_b_bot3,e_bb3[exp_idx]); mismatch_cnt=mismatch_cnt+1; end
+        if (rst_n && checking_en && rev_a_valid) begin
+            if (latency_skip_a) begin
+                latency_skip_a = 0;
+            end else begin
+            $display("[REV_A] out_idx=%0d d={%02h,%02h,%02h,%02h,%02h,%02h,%02h,%02h}",
+                out_idx_a,
+                rev_a_d0, rev_a_d1, rev_a_d2, rev_a_d3,
+                rev_a_d4, rev_a_d5, rev_a_d6, rev_a_d7);
+
+            if (rev_a_d0 !== stored[0][out_idx_a]) begin
+                $display("  [MISMATCH] A lane0 out_idx=%0d got=%02h exp=%02h", out_idx_a, rev_a_d0, stored[0][out_idx_a]);
+                mismatch_cnt = mismatch_cnt + 1;
             end
-            check_cnt = check_cnt + 1;
-            exp_idx = exp_idx + 1;
+            if (rev_a_d1 !== stored[1][out_idx_a]) begin
+                $display("  [MISMATCH] A lane1 out_idx=%0d got=%02h exp=%02h", out_idx_a, rev_a_d1, stored[1][out_idx_a]);
+                mismatch_cnt = mismatch_cnt + 1;
+            end
+            if (rev_a_d2 !== stored[2][out_idx_a]) begin
+                $display("  [MISMATCH] A lane2 out_idx=%0d got=%02h exp=%02h", out_idx_a, rev_a_d2, stored[2][out_idx_a]);
+                mismatch_cnt = mismatch_cnt + 1;
+            end
+            if (rev_a_d3 !== stored[3][out_idx_a]) begin
+                $display("  [MISMATCH] A lane3 out_idx=%0d got=%02h exp=%02h", out_idx_a, rev_a_d3, stored[3][out_idx_a]);
+                mismatch_cnt = mismatch_cnt + 1;
+            end
+            if (rev_a_d4 !== stored[4][out_idx_a]) begin
+                $display("  [MISMATCH] A lane4 out_idx=%0d got=%02h exp=%02h", out_idx_a, rev_a_d4, stored[4][out_idx_a]);
+                mismatch_cnt = mismatch_cnt + 1;
+            end
+            if (rev_a_d5 !== stored[5][out_idx_a]) begin
+                $display("  [MISMATCH] A lane5 out_idx=%0d got=%02h exp=%02h", out_idx_a, rev_a_d5, stored[5][out_idx_a]);
+                mismatch_cnt = mismatch_cnt + 1;
+            end
+            if (rev_a_d6 !== stored[6][out_idx_a]) begin
+                $display("  [MISMATCH] A lane6 out_idx=%0d got=%02h exp=%02h", out_idx_a, rev_a_d6, stored[6][out_idx_a]);
+                mismatch_cnt = mismatch_cnt + 1;
+            end
+            if (rev_a_d7 !== stored[7][out_idx_a]) begin
+                $display("  [MISMATCH] A lane7 out_idx=%0d got=%02h exp=%02h", out_idx_a, rev_a_d7, stored[7][out_idx_a]);
+                mismatch_cnt = mismatch_cnt + 1;
+            end
+
+            check_cnt_a = check_cnt_a + 1;
+            out_idx_a = out_idx_a + 1;
+            end
+        end
+    end
+
+    // Group B checker: rev_b outputs -> din lanes 8-15
+    always @(posedge clk_slow) begin
+        if (rst_n && checking_en && rev_b_valid && lane_mode[1]) begin
+            if (latency_skip_b) begin
+                latency_skip_b = 0;
+            end else begin
+            $display("[REV_B] out_idx=%0d d={%02h,%02h,%02h,%02h,%02h,%02h,%02h,%02h}",
+                out_idx_b,
+                rev_b_d0, rev_b_d1, rev_b_d2, rev_b_d3,
+                rev_b_d4, rev_b_d5, rev_b_d6, rev_b_d7);
+
+            if (rev_b_d0 !== stored[8][out_idx_b]) begin
+                $display("  [MISMATCH] B lane8 out_idx=%0d got=%02h exp=%02h", out_idx_b, rev_b_d0, stored[8][out_idx_b]);
+                mismatch_cnt = mismatch_cnt + 1;
+            end
+            if (rev_b_d1 !== stored[9][out_idx_b]) begin
+                $display("  [MISMATCH] B lane9 out_idx=%0d got=%02h exp=%02h", out_idx_b, rev_b_d1, stored[9][out_idx_b]);
+                mismatch_cnt = mismatch_cnt + 1;
+            end
+            if (rev_b_d2 !== stored[10][out_idx_b]) begin
+                $display("  [MISMATCH] B lane10 out_idx=%0d got=%02h exp=%02h", out_idx_b, rev_b_d2, stored[10][out_idx_b]);
+                mismatch_cnt = mismatch_cnt + 1;
+            end
+            if (rev_b_d3 !== stored[11][out_idx_b]) begin
+                $display("  [MISMATCH] B lane11 out_idx=%0d got=%02h exp=%02h", out_idx_b, rev_b_d3, stored[11][out_idx_b]);
+                mismatch_cnt = mismatch_cnt + 1;
+            end
+            if (rev_b_d4 !== stored[12][out_idx_b]) begin
+                $display("  [MISMATCH] B lane12 out_idx=%0d got=%02h exp=%02h", out_idx_b, rev_b_d4, stored[12][out_idx_b]);
+                mismatch_cnt = mismatch_cnt + 1;
+            end
+            if (rev_b_d5 !== stored[13][out_idx_b]) begin
+                $display("  [MISMATCH] B lane13 out_idx=%0d got=%02h exp=%02h", out_idx_b, rev_b_d5, stored[13][out_idx_b]);
+                mismatch_cnt = mismatch_cnt + 1;
+            end
+            if (rev_b_d6 !== stored[14][out_idx_b]) begin
+                $display("  [MISMATCH] B lane14 out_idx=%0d got=%02h exp=%02h", out_idx_b, rev_b_d6, stored[14][out_idx_b]);
+                mismatch_cnt = mismatch_cnt + 1;
+            end
+            if (rev_b_d7 !== stored[15][out_idx_b]) begin
+                $display("  [MISMATCH] B lane15 out_idx=%0d got=%02h exp=%02h", out_idx_b, rev_b_d7, stored[15][out_idx_b]);
+                mismatch_cnt = mismatch_cnt + 1;
+            end
+
+            check_cnt_b = check_cnt_b + 1;
+            out_idx_b = out_idx_b + 1;
+            end
         end
     end
 
@@ -136,117 +283,20 @@ module tb_loopback_desched_top;
 
     task clear_inputs;
         begin
-            fwd_a_valid_in = 0; fwd_b_valid_in = 0;
-            {fwd_a_top0,fwd_a_top1,fwd_a_top2,fwd_a_top3} = '0;
-            {fwd_a_bot0,fwd_a_bot1,fwd_a_bot2,fwd_a_bot3} = '0;
-            {fwd_b_top0,fwd_b_top1,fwd_b_top2,fwd_b_top3} = '0;
-            {fwd_b_bot0,fwd_b_bot1,fwd_b_bot2,fwd_b_bot3} = '0;
+            valid_in = 0;
+            din0  = 0; din1  = 0; din2  = 0; din3  = 0;
+            din4  = 0; din5  = 0; din6  = 0; din7  = 0;
+            din8  = 0; din9  = 0; din10 = 0; din11 = 0;
+            din12 = 0; din13 = 0; din14 = 0; din15 = 0;
         end
     endtask
 
-    // PHY-like pattern: independent sequential values per group
-    //   even: a_top={v+0,v+1,0,0} a_bot={v+4,v+5,0,0} b_top={v+8,v+9,0,0} b_bot={v+c,v+d,0,0}
-    //   odd:  a_top={v+2,v+3,0,0} a_bot={v+6,v+7,0,0} b_top={v+a,v+b,0,0} b_bot={v+e,v+f,0,0}
-    //   compact expected: a_top={v+0,v+1,v+2,v+3} a_bot={v+4..7} b_top={v+8..b} b_bot={v+c..f}
-    task drive_pair_phy;
-        input integer pair_idx;
-        input [1:0]  mode;
-        reg [DATA_W-1:0] v;
+    task clear_stored;
+        integer lane, cyc;
         begin
-            v = 8'h10 + pair_idx * 16;
-            @(posedge clk_slow);
-            fwd_a_valid_in = 1;
-            fwd_b_valid_in = mode[1];
-            fwd_a_top0=v+0; fwd_a_top1=v+1; fwd_a_top2=0; fwd_a_top3=0;
-            fwd_a_bot0=v+4; fwd_a_bot1=v+5; fwd_a_bot2=0; fwd_a_bot3=0;
-            fwd_b_top0=v+8; fwd_b_top1=v+9; fwd_b_top2=0; fwd_b_top3=0;
-            fwd_b_bot0=v+12; fwd_b_bot1=v+13; fwd_b_bot2=0; fwd_b_bot3=0;
-            @(posedge clk_slow);
-            fwd_a_top0=v+2; fwd_a_top1=v+3; fwd_a_top2=0; fwd_a_top3=0;
-            fwd_a_bot0=v+6; fwd_a_bot1=v+7; fwd_a_bot2=0; fwd_a_bot3=0;
-            fwd_b_top0=v+10; fwd_b_top1=v+11; fwd_b_top2=0; fwd_b_top3=0;
-            fwd_b_bot0=v+14; fwd_b_bot1=v+15; fwd_b_bot2=0; fwd_b_bot3=0;
-        end
-    endtask
-
-    task store_exp_phy;
-        input integer idx;
-        input integer pair_idx;
-        input [1:0]  mode;
-        reg [DATA_W-1:0] v;
-        begin
-            v = 8'h10 + pair_idx * 16;
-            // a_top always active
-            e_at0[idx]=v+0;  e_at1[idx]=v+1;  e_at2[idx]=v+2;  e_at3[idx]=v+3;
-            // a_bot active for 8L/12L/16L
-            if (mode >= 2'b01) begin
-                e_ab0[idx]=v+4; e_ab1[idx]=v+5; e_ab2[idx]=v+6; e_ab3[idx]=v+7;
-            end else begin
-                e_ab0[idx]=0; e_ab1[idx]=0; e_ab2[idx]=0; e_ab3[idx]=0;
-            end
-            // b_top active for 12L/16L
-            if (mode >= 2'b10) begin
-                e_bt0[idx]=v+8; e_bt1[idx]=v+9; e_bt2[idx]=v+10; e_bt3[idx]=v+11;
-            end else begin
-                e_bt0[idx]=0; e_bt1[idx]=0; e_bt2[idx]=0; e_bt3[idx]=0;
-            end
-            // b_bot active for 16L only
-            if (mode == 2'b11) begin
-                e_bb0[idx]=v+12; e_bb1[idx]=v+13; e_bb2[idx]=v+14; e_bb3[idx]=v+15;
-            end else begin
-                e_bb0[idx]=0; e_bb1[idx]=0; e_bb2[idx]=0; e_bb3[idx]=0;
-            end
-        end
-    endtask
-
-    // VLANE-like pattern: even/odd interleaved per group
-    //   even: a_top={v+0,v+1,0,0} a_bot={v+2,v+3,0,0} b_top={v+4,v+5,0,0} b_bot={v+6,v+7,0,0}
-    //   odd:  a_top={v+8,v+9,0,0} a_bot={v+a,v+b,0,0} b_top={v+c,v+d,0,0} b_bot={v+e,v+f,0,0}
-    //   compact expected: a_top={v+0,v+1,v+8,v+9} a_bot={v+2..3,v+a..b} ...
-    task drive_pair_vlane;
-        input integer pair_idx;
-        input [1:0]  mode;
-        reg [DATA_W-1:0] v;
-        begin
-            v = 8'h20 + pair_idx * 16;
-            @(posedge clk_slow);
-            fwd_a_valid_in = 1;
-            fwd_b_valid_in = mode[1];
-            fwd_a_top0=v+0; fwd_a_top1=v+1; fwd_a_top2=0; fwd_a_top3=0;
-            fwd_a_bot0=v+2; fwd_a_bot1=v+3; fwd_a_bot2=0; fwd_a_bot3=0;
-            fwd_b_top0=v+4; fwd_b_top1=v+5; fwd_b_top2=0; fwd_b_top3=0;
-            fwd_b_bot0=v+6; fwd_b_bot1=v+7; fwd_b_bot2=0; fwd_b_bot3=0;
-            @(posedge clk_slow);
-            fwd_a_top0=v+8;  fwd_a_top1=v+9;  fwd_a_top2=0; fwd_a_top3=0;
-            fwd_a_bot0=v+10; fwd_a_bot1=v+11; fwd_a_bot2=0; fwd_a_bot3=0;
-            fwd_b_top0=v+12; fwd_b_top1=v+13; fwd_b_top2=0; fwd_b_top3=0;
-            fwd_b_bot0=v+14; fwd_b_bot1=v+15; fwd_b_bot2=0; fwd_b_bot3=0;
-        end
-    endtask
-
-    task store_exp_vlane;
-        input integer idx;
-        input integer pair_idx;
-        input [1:0]  mode;
-        reg [DATA_W-1:0] v;
-        begin
-            v = 8'h20 + pair_idx * 16;
-            e_at0[idx]=v+0; e_at1[idx]=v+1; e_at2[idx]=v+8;  e_at3[idx]=v+9;
-            if (mode >= 2'b01) begin
-                e_ab0[idx]=v+2; e_ab1[idx]=v+3; e_ab2[idx]=v+10; e_ab3[idx]=v+11;
-            end else begin
-                e_ab0[idx]=0; e_ab1[idx]=0; e_ab2[idx]=0; e_ab3[idx]=0;
-            end
-            if (mode >= 2'b10) begin
-                e_bt0[idx]=v+4; e_bt1[idx]=v+5; e_bt2[idx]=v+12; e_bt3[idx]=v+13;
-            end else begin
-                e_bt0[idx]=0; e_bt1[idx]=0; e_bt2[idx]=0; e_bt3[idx]=0;
-            end
-            if (mode == 2'b11) begin
-                e_bb0[idx]=v+6; e_bb1[idx]=v+7; e_bb2[idx]=v+14; e_bb3[idx]=v+15;
-            end else begin
-                e_bb0[idx]=0; e_bb1[idx]=0; e_bb2[idx]=0; e_bb3[idx]=0;
-            end
+            for (lane = 0; lane < 16; lane = lane + 1)
+                for (cyc = 0; cyc < MAX_CYCLES; cyc = cyc + 1)
+                    stored[lane][cyc] = 0;
         end
     endtask
 
@@ -254,89 +304,180 @@ module tb_loopback_desched_top;
         input [255:0] name;
         input [1:0]   mode;
         input integer ratio;
-        input integer drain;
-        input integer is_vlane;
-        integer p;
+        integer c;
+        integer expected_a, expected_b;
+        integer mode_pass;
         begin
-            $display("\n--- %0s ---", name);
+            $display("\n========================================");
+            $display("--- %0s (mode=%0b, ratio=%0d) ---", name, mode, ratio);
+            $display("========================================");
+
+            // Setup
             lane_mode = mode;
             slow_half = ratio * CLK_FAST_HALF;
             mismatch_cnt = 0;
-            check_cnt = 0;
-            exp_idx = 0;
-            exp_total = NUM_PAIRS;
-            is_drain_mode = drain;
+            check_cnt_a = 0;
+            check_cnt_b = 0;
+            out_idx_a = 0;
+            out_idx_b = 0;
             checking_en = 0;
-
-            if (!drain) begin
-                for (p = 0; p < NUM_PAIRS; p = p + 1) begin
-                    if (is_vlane) store_exp_vlane(p, p, mode);
-                    else          store_exp_phy(p, p, mode);
-                end
-            end
+            latency_skip_a = 1;
+            latency_skip_b = 1;
 
             clear_inputs;
+            clear_stored;
+
+            // Reset
             rst_n = 0;
             repeat(8) @(posedge clk_fast);
             rst_n = 1;
-            repeat(2) @(posedge clk_slow);
+            repeat(4) @(posedge clk_slow);
+
+            // Enable checking
             checking_en = 1;
 
-            for (p = 0; p < NUM_PAIRS; p = p + 1) begin
-                if (is_vlane) drive_pair_vlane(p, mode);
-                else          drive_pair_phy(p, mode);
+            // Drive 16 cycles of per-lane-per-cycle data
+            // din[n] = n + cycle_idx * 16  (for active non-zero lanes)
+            // din2,3,6,7,10,11,14,15 = 0 always
+            // Active lanes per mode:
+            //   4L:  din0, din1
+            //   8L:  din0, din1, din4, din5
+            //   12L: din0, din1, din4, din5, din8, din9
+            //   16L: din0, din1, din4, din5, din8, din9, din12, din13
+            for (c = 0; c < NUM_CYCLES; c = c + 1) begin
+                @(posedge clk_slow);
+                valid_in = 1;
+
+                // Lane 0,1 always active
+                din0 = 8'(0 + c * 16);
+                din1 = 8'(1 + c * 16);
+                din2 = 0;
+                din3 = 0;
+                stored[0][c] = 8'(0 + c * 16);
+                stored[1][c] = 8'(1 + c * 16);
+                stored[2][c] = 0;
+                stored[3][c] = 0;
+
+                // Lane 4,5 active for 8L/12L/16L
+                if (mode >= 2'b01) begin
+                    din4 = 8'(4 + c * 16);
+                    din5 = 8'(5 + c * 16);
+                end else begin
+                    din4 = 0;
+                    din5 = 0;
+                end
+                din6 = 0;
+                din7 = 0;
+                stored[4][c] = (mode >= 2'b01) ? 8'(4 + c * 16) : 8'd0;
+                stored[5][c] = (mode >= 2'b01) ? 8'(5 + c * 16) : 8'd0;
+                stored[6][c] = 0;
+                stored[7][c] = 0;
+
+                // Lane 8,9 active for 12L/16L
+                if (mode >= 2'b10) begin
+                    din8  = 8'(8 + c * 16);
+                    din9  = 8'(9 + c * 16);
+                end else begin
+                    din8  = 0;
+                    din9  = 0;
+                end
+                din10 = 0;
+                din11 = 0;
+                stored[8][c]  = (mode >= 2'b10) ? 8'(8  + c * 16) : 8'd0;
+                stored[9][c]  = (mode >= 2'b10) ? 8'(9  + c * 16) : 8'd0;
+                stored[10][c] = 0;
+                stored[11][c] = 0;
+
+                // Lane 12,13 active for 16L
+                if (mode == 2'b11) begin
+                    din12 = 8'(12 + c * 16);
+                    din13 = 8'(13 + c * 16);
+                end else begin
+                    din12 = 0;
+                    din13 = 0;
+                end
+                din14 = 0;
+                din15 = 0;
+                stored[12][c] = (mode == 2'b11) ? 8'(12 + c * 16) : 8'd0;
+                stored[13][c] = (mode == 2'b11) ? 8'(13 + c * 16) : 8'd0;
+                stored[14][c] = 0;
+                stored[15][c] = 0;
             end
 
+            // Deassert valid_in
             @(posedge clk_slow);
             clear_inputs;
-            repeat(NUM_PAIRS * ratio + 40) @(posedge clk_slow);
+
+            // Wait for pipeline to drain (generous: 100 slow cycles)
+            repeat(100) @(posedge clk_slow);
+
+            // Disable checking
             checking_en = 0;
 
-            if (drain) begin
-                if (check_cnt >= NUM_PAIRS)
-                    $display("  PASS %0s drain-checked %0d outputs", name, check_cnt);
-                else begin
-                    $display("  FAIL %0s expected >= %0d, got %0d", name, NUM_PAIRS, check_cnt);
-                    fail_total = fail_total + 1;
-                end
-            end else begin
-                if (mismatch_cnt == 0 && check_cnt >= NUM_PAIRS)
-                    $display("  PASS %0s checked %0d outputs, 0 mismatches", name, check_cnt);
-                else begin
-                    $display("  FAIL %0s checks=%0d mismatches=%0d", name, check_cnt, mismatch_cnt);
-                    fail_total = fail_total + 1;
-                end
+            // Report
+            // Pipeline fill costs 1 output (latency skip), so expect NUM_CYCLES-1
+            expected_a = NUM_CYCLES - 1;
+            expected_b = (mode[1]) ? (NUM_CYCLES - 1) : 0;
+            mode_pass = 1;
+
+            $display("  Group A: checked %0d / %0d expected", check_cnt_a, expected_a);
+            if (expected_b > 0)
+                $display("  Group B: checked %0d / %0d expected", check_cnt_b, expected_b);
+
+            if (check_cnt_a < expected_a) begin
+                $display("  FAIL: Group A output count insufficient (%0d < %0d)", check_cnt_a, expected_a);
+                mode_pass = 0;
+            end
+            if (expected_b > 0 && check_cnt_b < expected_b) begin
+                $display("  FAIL: Group B output count insufficient (%0d < %0d)", check_cnt_b, expected_b);
+                mode_pass = 0;
+            end
+            if (mismatch_cnt > 0) begin
+                $display("  FAIL: %0d mismatches detected", mismatch_cnt);
+                mode_pass = 0;
+            end
+
+            if (mode_pass)
+                $display("  PASS %0s", name);
+            else begin
+                $display("  FAIL %0s", name);
+                fail_total = fail_total + 1;
             end
         end
     endtask
 
     // =========================================================================
-    // Main: 8 cases = 4 lane modes × 2 patterns
+    // Main test sequence
     // =========================================================================
     initial begin
         fail_total = 0;
         rst_n = 0;
         lane_mode = 2'b00;
         slow_half = CLK_FAST_HALF;
-        clear_inputs;
         checking_en = 0;
+        clear_inputs;
 
-        //                       name                mode  ratio drain vlane
-        run_mode("4L  PHY  20-pair",  2'b00,  1,    0,    0);
-        run_mode("4L  VLANE 20-pair", 2'b00,  1,    0,    1);
-        run_mode("8L  PHY  20-pair",  2'b01,  2,    0,    0);
-        run_mode("8L  VLANE 20-pair", 2'b01,  2,    0,    1);
-        run_mode("12L PHY  20-pair",  2'b10,  3,    1,    0);
-        run_mode("12L VLANE 20-pair", 2'b10,  3,    1,    1);
-        run_mode("16L PHY  20-pair",  2'b11,  4,    0,    0);
-        run_mode("16L VLANE 20-pair", 2'b11,  4,    0,    1);
+        //                  name             mode    ratio
+        run_mode("4L  PHY",  2'b00,  1);
+        run_mode("8L  PHY",  2'b01,  2);
+        run_mode("12L PHY",  2'b10,  3);
+        run_mode("16L PHY",  2'b11,  4);
 
         $display("\n============================================");
         if (fail_total == 0)
-            $display("[PASS] ALL DESCHED_TOP LOOPBACK TESTS PASSED (8 cases, %0d pairs each)", NUM_PAIRS);
+            $display("[PASS] ALL LOOPBACK DESCHED_TOP TESTS PASSED (4 modes, %0d input cycles each)", NUM_CYCLES);
         else
-            $display("[FAIL] %0d case(s) failed", fail_total);
+            $display("[FAIL] %0d mode(s) failed", fail_total);
         $display("============================================");
+        $finish;
+    end
+
+    // =========================================================================
+    // Timeout
+    // =========================================================================
+    initial begin
+        #200000;
+        $display("[TIMEOUT] Simulation exceeded 200000ns");
         $finish;
     end
 

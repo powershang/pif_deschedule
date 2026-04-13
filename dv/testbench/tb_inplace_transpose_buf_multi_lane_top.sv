@@ -114,7 +114,7 @@ module tb;
     end
 
     initial begin
-        $dumpfile("/mnt/c/python_work/realtek_pc/PIF_schedule_reorder/wave_multi_lane_top.vcd");
+        $dumpfile("wave_multi_lane_top.vcd");
         $dumpvars(0, tb);
     end
 
