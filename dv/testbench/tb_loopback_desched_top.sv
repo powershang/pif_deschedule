@@ -3,8 +3,11 @@
 // End-to-end A-to-A verification:
 //   din[0:15] -> scheduler_top -> descheduler(Stage1) -> reverse_transpose -> CHECK
 //
-// Verifies that reverse_inplace_transpose output (BEFORE compactor) exactly
-// matches the original scheduler_top per-lane-per-cycle input.
+// Architecture: Burst-aware Line Dumper + Post-sim Golden Compare
+//   - A "line" = one continuous burst of valid data (valid high -> low = one line)
+//   - Golden dumper:  stores scheduler_top input, indexed by [line][cycle][lane]
+//   - DUT dumper:     stores reverse_transpose output, same indexing
+//   - Compare:        post-sim per-mode, line-by-line with offset detection
 //
 // No compactor in this testbench -- it is out of scope.
 //
@@ -13,10 +16,10 @@
 //   u_desched   : descheduler Stage1  (4-lane fast -> chunk output)
 //   u_rev_a     : reverse_transpose   (Group A: lanes 0-7)
 //   u_rev_b     : reverse_transpose   (Group B: lanes 8-15)
-//   checker     : compare rev outputs with stored din[0:15]
+//   burst-aware line dumper + golden compare (post-sim)
 //
 // Test matrix: 4 lane modes (4L, 8L, 12L, 16L), PHY mode only.
-// Each mode: 16 input cycles of per-lane-per-cycle data.
+// Each mode: 24 input cycles of per-lane-per-cycle data (single continuous burst).
 // =============================================================================
 
 `timescale 1ns/1ps
@@ -26,7 +29,10 @@ module tb_loopback_desched_top;
     localparam DATA_W        = 8;
     localparam CLK_FAST_HALF = 5;
     localparam NUM_CYCLES    = 24;
-    localparam MAX_CYCLES    = 32;   // storage depth per lane
+
+    // Line storage dimensions
+    localparam MAX_LINES    = 8;    // max bursts per test
+    localparam MAX_LINE_LEN = 32;   // max cycles per burst
 
     // =========================================================================
     // Clocks & reset
@@ -162,116 +168,130 @@ module tb_loopback_desched_top;
     );
 
     // =========================================================================
-    // Expected data storage: stored[lane][cycle]
+    // Line-based golden arrays (input side)
+    // Flat 2D for iverilog: [line * MAX_LINE_LEN + cyc][lane]
     // =========================================================================
-    reg [DATA_W-1:0] stored [0:15][0:MAX_CYCLES-1];
+    reg [DATA_W-1:0] golden_a [0:MAX_LINES*MAX_LINE_LEN-1][0:7];
+    reg [DATA_W-1:0] golden_b [0:MAX_LINES*MAX_LINE_LEN-1][0:7];
+    integer golden_line_cnt;
+    integer golden_line_len [0:MAX_LINES-1];
 
     // =========================================================================
-    // Checker
+    // Line-based capture arrays (output side)
     // =========================================================================
-    integer out_idx_a, out_idx_b;
-    integer mismatch_cnt;
-    integer check_cnt_a, check_cnt_b;
-    integer checking_en;
-    integer latency_skip_a, latency_skip_b;  // skip first output (9T pipeline fill)
+    reg [DATA_W-1:0] cap_a [0:MAX_LINES*MAX_LINE_LEN-1][0:7];
+    integer cap_a_line_cnt;
+    integer cap_a_line_len [0:MAX_LINES-1];
 
-    // Group A checker: rev_a outputs -> din lanes 0-7
+    reg [DATA_W-1:0] cap_b [0:MAX_LINES*MAX_LINE_LEN-1][0:7];
+    integer cap_b_line_cnt;
+    integer cap_b_line_len [0:MAX_LINES-1];
+
+    // =========================================================================
+    // Dumper control
+    // =========================================================================
+    integer dumper_en;
+
+    // =========================================================================
+    // Golden dumper (input side) - track valid_in rising/falling edges
+    // =========================================================================
+    reg prev_valid_in;
+    integer g_line, g_cyc;
+
     always @(posedge clk_slow) begin
-        if (rst_n && checking_en && rev_a_valid) begin
-            if (latency_skip_a) begin
-                latency_skip_a = 0;
-            end else begin
-            $display("[REV_A] out_idx=%0d d={%02h,%02h,%02h,%02h,%02h,%02h,%02h,%02h}",
-                out_idx_a,
-                rev_a_d0, rev_a_d1, rev_a_d2, rev_a_d3,
-                rev_a_d4, rev_a_d5, rev_a_d6, rev_a_d7);
+        if (rst_n && dumper_en) begin
+            if (valid_in && !prev_valid_in) begin
+                // Rising edge of valid_in: start new line
+                g_line = golden_line_cnt;
+                g_cyc = 0;
+                golden_line_cnt = golden_line_cnt + 1;
+            end
+            if (valid_in) begin
+                // Store this cycle's 16-lane data split into golden_a (lanes 0-7) and golden_b (lanes 8-15)
+                golden_a[g_line * MAX_LINE_LEN + g_cyc][0] = din0;
+                golden_a[g_line * MAX_LINE_LEN + g_cyc][1] = din1;
+                golden_a[g_line * MAX_LINE_LEN + g_cyc][2] = din2;
+                golden_a[g_line * MAX_LINE_LEN + g_cyc][3] = din3;
+                golden_a[g_line * MAX_LINE_LEN + g_cyc][4] = din4;
+                golden_a[g_line * MAX_LINE_LEN + g_cyc][5] = din5;
+                golden_a[g_line * MAX_LINE_LEN + g_cyc][6] = din6;
+                golden_a[g_line * MAX_LINE_LEN + g_cyc][7] = din7;
 
-            if (rev_a_d0 !== stored[0][out_idx_a]) begin
-                $display("  [MISMATCH] A lane0 out_idx=%0d got=%02h exp=%02h", out_idx_a, rev_a_d0, stored[0][out_idx_a]);
-                mismatch_cnt = mismatch_cnt + 1;
-            end
-            if (rev_a_d1 !== stored[1][out_idx_a]) begin
-                $display("  [MISMATCH] A lane1 out_idx=%0d got=%02h exp=%02h", out_idx_a, rev_a_d1, stored[1][out_idx_a]);
-                mismatch_cnt = mismatch_cnt + 1;
-            end
-            if (rev_a_d2 !== stored[2][out_idx_a]) begin
-                $display("  [MISMATCH] A lane2 out_idx=%0d got=%02h exp=%02h", out_idx_a, rev_a_d2, stored[2][out_idx_a]);
-                mismatch_cnt = mismatch_cnt + 1;
-            end
-            if (rev_a_d3 !== stored[3][out_idx_a]) begin
-                $display("  [MISMATCH] A lane3 out_idx=%0d got=%02h exp=%02h", out_idx_a, rev_a_d3, stored[3][out_idx_a]);
-                mismatch_cnt = mismatch_cnt + 1;
-            end
-            if (rev_a_d4 !== stored[4][out_idx_a]) begin
-                $display("  [MISMATCH] A lane4 out_idx=%0d got=%02h exp=%02h", out_idx_a, rev_a_d4, stored[4][out_idx_a]);
-                mismatch_cnt = mismatch_cnt + 1;
-            end
-            if (rev_a_d5 !== stored[5][out_idx_a]) begin
-                $display("  [MISMATCH] A lane5 out_idx=%0d got=%02h exp=%02h", out_idx_a, rev_a_d5, stored[5][out_idx_a]);
-                mismatch_cnt = mismatch_cnt + 1;
-            end
-            if (rev_a_d6 !== stored[6][out_idx_a]) begin
-                $display("  [MISMATCH] A lane6 out_idx=%0d got=%02h exp=%02h", out_idx_a, rev_a_d6, stored[6][out_idx_a]);
-                mismatch_cnt = mismatch_cnt + 1;
-            end
-            if (rev_a_d7 !== stored[7][out_idx_a]) begin
-                $display("  [MISMATCH] A lane7 out_idx=%0d got=%02h exp=%02h", out_idx_a, rev_a_d7, stored[7][out_idx_a]);
-                mismatch_cnt = mismatch_cnt + 1;
-            end
+                golden_b[g_line * MAX_LINE_LEN + g_cyc][0] = din8;
+                golden_b[g_line * MAX_LINE_LEN + g_cyc][1] = din9;
+                golden_b[g_line * MAX_LINE_LEN + g_cyc][2] = din10;
+                golden_b[g_line * MAX_LINE_LEN + g_cyc][3] = din11;
+                golden_b[g_line * MAX_LINE_LEN + g_cyc][4] = din12;
+                golden_b[g_line * MAX_LINE_LEN + g_cyc][5] = din13;
+                golden_b[g_line * MAX_LINE_LEN + g_cyc][6] = din14;
+                golden_b[g_line * MAX_LINE_LEN + g_cyc][7] = din15;
 
-            check_cnt_a = check_cnt_a + 1;
-            out_idx_a = out_idx_a + 1;
+                golden_line_len[g_line] = g_cyc + 1;
+                g_cyc = g_cyc + 1;
             end
+            prev_valid_in = valid_in;
         end
     end
 
-    // Group B checker: rev_b outputs -> din lanes 8-15
+    // =========================================================================
+    // DUT dumper Group A (output side) - track rev_a_valid rising/falling edges
+    // =========================================================================
+    reg prev_rev_a_valid;
+    integer ca_line, ca_cyc;
+
     always @(posedge clk_slow) begin
-        if (rst_n && checking_en && rev_b_valid && lane_mode[1]) begin
-            if (latency_skip_b) begin
-                latency_skip_b = 0;
-            end else begin
-            $display("[REV_B] out_idx=%0d d={%02h,%02h,%02h,%02h,%02h,%02h,%02h,%02h}",
-                out_idx_b,
-                rev_b_d0, rev_b_d1, rev_b_d2, rev_b_d3,
-                rev_b_d4, rev_b_d5, rev_b_d6, rev_b_d7);
+        if (rst_n && dumper_en) begin
+            if (rev_a_valid && !prev_rev_a_valid) begin
+                // Rising edge: new output line
+                ca_line = cap_a_line_cnt;
+                ca_cyc = 0;
+                cap_a_line_cnt = cap_a_line_cnt + 1;
+            end
+            if (rev_a_valid) begin
+                cap_a[ca_line * MAX_LINE_LEN + ca_cyc][0] = rev_a_d0;
+                cap_a[ca_line * MAX_LINE_LEN + ca_cyc][1] = rev_a_d1;
+                cap_a[ca_line * MAX_LINE_LEN + ca_cyc][2] = rev_a_d2;
+                cap_a[ca_line * MAX_LINE_LEN + ca_cyc][3] = rev_a_d3;
+                cap_a[ca_line * MAX_LINE_LEN + ca_cyc][4] = rev_a_d4;
+                cap_a[ca_line * MAX_LINE_LEN + ca_cyc][5] = rev_a_d5;
+                cap_a[ca_line * MAX_LINE_LEN + ca_cyc][6] = rev_a_d6;
+                cap_a[ca_line * MAX_LINE_LEN + ca_cyc][7] = rev_a_d7;
 
-            if (rev_b_d0 !== stored[8][out_idx_b]) begin
-                $display("  [MISMATCH] B lane8 out_idx=%0d got=%02h exp=%02h", out_idx_b, rev_b_d0, stored[8][out_idx_b]);
-                mismatch_cnt = mismatch_cnt + 1;
+                cap_a_line_len[ca_line] = ca_cyc + 1;
+                ca_cyc = ca_cyc + 1;
             end
-            if (rev_b_d1 !== stored[9][out_idx_b]) begin
-                $display("  [MISMATCH] B lane9 out_idx=%0d got=%02h exp=%02h", out_idx_b, rev_b_d1, stored[9][out_idx_b]);
-                mismatch_cnt = mismatch_cnt + 1;
-            end
-            if (rev_b_d2 !== stored[10][out_idx_b]) begin
-                $display("  [MISMATCH] B lane10 out_idx=%0d got=%02h exp=%02h", out_idx_b, rev_b_d2, stored[10][out_idx_b]);
-                mismatch_cnt = mismatch_cnt + 1;
-            end
-            if (rev_b_d3 !== stored[11][out_idx_b]) begin
-                $display("  [MISMATCH] B lane11 out_idx=%0d got=%02h exp=%02h", out_idx_b, rev_b_d3, stored[11][out_idx_b]);
-                mismatch_cnt = mismatch_cnt + 1;
-            end
-            if (rev_b_d4 !== stored[12][out_idx_b]) begin
-                $display("  [MISMATCH] B lane12 out_idx=%0d got=%02h exp=%02h", out_idx_b, rev_b_d4, stored[12][out_idx_b]);
-                mismatch_cnt = mismatch_cnt + 1;
-            end
-            if (rev_b_d5 !== stored[13][out_idx_b]) begin
-                $display("  [MISMATCH] B lane13 out_idx=%0d got=%02h exp=%02h", out_idx_b, rev_b_d5, stored[13][out_idx_b]);
-                mismatch_cnt = mismatch_cnt + 1;
-            end
-            if (rev_b_d6 !== stored[14][out_idx_b]) begin
-                $display("  [MISMATCH] B lane14 out_idx=%0d got=%02h exp=%02h", out_idx_b, rev_b_d6, stored[14][out_idx_b]);
-                mismatch_cnt = mismatch_cnt + 1;
-            end
-            if (rev_b_d7 !== stored[15][out_idx_b]) begin
-                $display("  [MISMATCH] B lane15 out_idx=%0d got=%02h exp=%02h", out_idx_b, rev_b_d7, stored[15][out_idx_b]);
-                mismatch_cnt = mismatch_cnt + 1;
-            end
+            prev_rev_a_valid = rev_a_valid;
+        end
+    end
 
-            check_cnt_b = check_cnt_b + 1;
-            out_idx_b = out_idx_b + 1;
+    // =========================================================================
+    // DUT dumper Group B (output side) - track rev_b_valid rising/falling edges
+    // =========================================================================
+    reg prev_rev_b_valid;
+    integer cb_line, cb_cyc;
+
+    always @(posedge clk_slow) begin
+        if (rst_n && dumper_en && lane_mode[1]) begin
+            if (rev_b_valid && !prev_rev_b_valid) begin
+                // Rising edge: new output line
+                cb_line = cap_b_line_cnt;
+                cb_cyc = 0;
+                cap_b_line_cnt = cap_b_line_cnt + 1;
             end
+            if (rev_b_valid) begin
+                cap_b[cb_line * MAX_LINE_LEN + cb_cyc][0] = rev_b_d0;
+                cap_b[cb_line * MAX_LINE_LEN + cb_cyc][1] = rev_b_d1;
+                cap_b[cb_line * MAX_LINE_LEN + cb_cyc][2] = rev_b_d2;
+                cap_b[cb_line * MAX_LINE_LEN + cb_cyc][3] = rev_b_d3;
+                cap_b[cb_line * MAX_LINE_LEN + cb_cyc][4] = rev_b_d4;
+                cap_b[cb_line * MAX_LINE_LEN + cb_cyc][5] = rev_b_d5;
+                cap_b[cb_line * MAX_LINE_LEN + cb_cyc][6] = rev_b_d6;
+                cap_b[cb_line * MAX_LINE_LEN + cb_cyc][7] = rev_b_d7;
+
+                cap_b_line_len[cb_line] = cb_cyc + 1;
+                cb_cyc = cb_cyc + 1;
+            end
+            prev_rev_b_valid = rev_b_valid;
         end
     end
 
@@ -279,6 +299,8 @@ module tb_loopback_desched_top;
     // Tasks
     // =========================================================================
     integer fail_total;
+    integer mismatch_cnt;
+
     initial fail_total = 0;
 
     task clear_inputs;
@@ -291,21 +313,154 @@ module tb_loopback_desched_top;
         end
     endtask
 
-    task clear_stored;
-        integer lane, cyc;
+    task clear_arrays;
+        integer idx, lane, ln;
         begin
-            for (lane = 0; lane < 16; lane = lane + 1)
-                for (cyc = 0; cyc < MAX_CYCLES; cyc = cyc + 1)
-                    stored[lane][cyc] = 0;
+            for (idx = 0; idx < MAX_LINES * MAX_LINE_LEN; idx = idx + 1)
+                for (lane = 0; lane < 8; lane = lane + 1) begin
+                    golden_a[idx][lane] = 0;
+                    golden_b[idx][lane] = 0;
+                    cap_a[idx][lane]    = 0;
+                    cap_b[idx][lane]    = 0;
+                end
+            for (ln = 0; ln < MAX_LINES; ln = ln + 1) begin
+                golden_line_len[ln] = 0;
+                cap_a_line_len[ln]  = 0;
+                cap_b_line_len[ln]  = 0;
+            end
+            golden_line_cnt = 0;
+            cap_a_line_cnt  = 0;
+            cap_b_line_cnt  = 0;
+            g_line = 0;
+            g_cyc  = 0;
+            ca_line = 0;
+            ca_cyc  = 0;
+            cb_line = 0;
+            cb_cyc  = 0;
+            prev_valid_in    = 0;
+            prev_rev_a_valid = 0;
+            prev_rev_b_valid = 0;
         end
     endtask
 
+    // =========================================================================
+    // Line-by-line golden compare with offset detection
+    // =========================================================================
+    task compare_results;
+        input [1:0] mode;
+        integer line, cyc, lane, offset;
+        integer mm;
+        integer g_base, c_base;
+        begin
+            mm = 0;
+
+            // --- Group A ---
+            $display("  Group A: golden %0d lines, capture %0d lines", golden_line_cnt, cap_a_line_cnt);
+
+            for (line = 0; line < cap_a_line_cnt; line = line + 1) begin
+                if (line >= golden_line_cnt) begin
+                    $display("  FAIL: capture A has extra line %0d", line);
+                    mm = mm + 1;
+                end else begin
+                    g_base = line * MAX_LINE_LEN;
+                    c_base = line * MAX_LINE_LEN;
+
+                    // Find offset: search for cap_a[c_base][0] in golden_a[g_base + *][0]
+                    offset = -1;
+                    for (cyc = 0; cyc < golden_line_len[line]; cyc = cyc + 1) begin
+                        if (offset == -1 && golden_a[g_base + cyc][0] === cap_a[c_base][0])
+                            offset = cyc;
+                    end
+
+                    if (offset < 0) begin
+                        $display("  Line %0d: FAIL could not find offset (cap[0][0]=%02h)", line, cap_a[c_base][0]);
+                        mm = mm + 1;
+                    end else begin
+                        // Compare entry by entry
+                        for (cyc = 0; cyc < cap_a_line_len[line]; cyc = cyc + 1) begin
+                            if (offset + cyc < golden_line_len[line]) begin
+                                for (lane = 0; lane < 8; lane = lane + 1) begin
+                                    if (cap_a[c_base + cyc][lane] !== golden_a[g_base + offset + cyc][lane]) begin
+                                        if (mm < 20)
+                                            $display("  [MISMATCH] A line%0d cyc%0d lane%0d got=%02h exp=%02h",
+                                                line, cyc, lane,
+                                                cap_a[c_base + cyc][lane],
+                                                golden_a[g_base + offset + cyc][lane]);
+                                        mm = mm + 1;
+                                    end
+                                end
+                            end
+                        end
+                        $display("  Line %0d: len golden=%0d capture=%0d offset=%0d",
+                            line, golden_line_len[line], cap_a_line_len[line], offset);
+                    end
+                end
+            end
+
+            if (cap_a_line_cnt < golden_line_cnt)
+                $display("  WARNING: capture A has fewer lines (%0d) than golden (%0d)",
+                    cap_a_line_cnt, golden_line_cnt);
+
+            // --- Group B (only for 12L/16L) ---
+            if (mode[1]) begin
+                $display("  Group B: golden %0d lines, capture %0d lines", golden_line_cnt, cap_b_line_cnt);
+
+                for (line = 0; line < cap_b_line_cnt; line = line + 1) begin
+                    if (line >= golden_line_cnt) begin
+                        $display("  FAIL: capture B has extra line %0d", line);
+                        mm = mm + 1;
+                    end else begin
+                        g_base = line * MAX_LINE_LEN;
+                        c_base = line * MAX_LINE_LEN;
+
+                        // Find offset: search for cap_b[c_base][0] in golden_b[g_base + *][0]
+                        offset = -1;
+                        for (cyc = 0; cyc < golden_line_len[line]; cyc = cyc + 1) begin
+                            if (offset == -1 && golden_b[g_base + cyc][0] === cap_b[c_base][0])
+                                offset = cyc;
+                        end
+
+                        if (offset < 0) begin
+                            $display("  Line %0d: FAIL could not find offset (cap[0][0]=%02h)", line, cap_b[c_base][0]);
+                            mm = mm + 1;
+                        end else begin
+                            for (cyc = 0; cyc < cap_b_line_len[line]; cyc = cyc + 1) begin
+                                if (offset + cyc < golden_line_len[line]) begin
+                                    for (lane = 0; lane < 8; lane = lane + 1) begin
+                                        if (cap_b[c_base + cyc][lane] !== golden_b[g_base + offset + cyc][lane]) begin
+                                            if (mm < 20)
+                                                $display("  [MISMATCH] B line%0d cyc%0d lane%0d got=%02h exp=%02h",
+                                                    line, cyc, lane,
+                                                    cap_b[c_base + cyc][lane],
+                                                    golden_b[g_base + offset + cyc][lane]);
+                                            mm = mm + 1;
+                                        end
+                                    end
+                                end
+                            end
+                            $display("  Line %0d: len golden=%0d capture=%0d offset=%0d",
+                                line, golden_line_len[line], cap_b_line_len[line], offset);
+                        end
+                    end
+                end
+
+                if (cap_b_line_cnt < golden_line_cnt)
+                    $display("  WARNING: capture B has fewer lines (%0d) than golden (%0d)",
+                        cap_b_line_cnt, golden_line_cnt);
+            end
+
+            mismatch_cnt = mismatch_cnt + mm;
+        end
+    endtask
+
+    // =========================================================================
+    // Run one mode
+    // =========================================================================
     task run_mode;
         input [255:0] name;
         input [1:0]   mode;
         input integer ratio;
         integer c;
-        integer expected_a, expected_b;
         integer mode_pass;
         begin
             $display("\n========================================");
@@ -313,19 +468,13 @@ module tb_loopback_desched_top;
             $display("========================================");
 
             // Setup
-            lane_mode = mode;
-            slow_half = ratio * CLK_FAST_HALF;
+            lane_mode    = mode;
+            slow_half    = ratio * CLK_FAST_HALF;
             mismatch_cnt = 0;
-            check_cnt_a = 0;
-            check_cnt_b = 0;
-            out_idx_a = 0;
-            out_idx_b = 0;
-            checking_en = 0;
-            latency_skip_a = 1;
-            latency_skip_b = 1;
+            dumper_en    = 0;
 
             clear_inputs;
-            clear_stored;
+            clear_arrays;
 
             // Reset
             rst_n = 0;
@@ -333,39 +482,22 @@ module tb_loopback_desched_top;
             rst_n = 1;
             repeat(4) @(posedge clk_slow);
 
-            // Enable checking
-            checking_en = 1;
+            // Enable dumper
+            dumper_en = 1;
 
-            // Drive 16 cycles of per-lane-per-cycle data
-            // din[n] = n + cycle_idx * 16  (for active non-zero lanes)
-            // din2,3,6,7,10,11,14,15 = 0 always
-            // Active lanes per mode:
-            //   4L:  din0, din1
-            //   8L:  din0, din1, din4, din5
-            //   12L: din0, din1, din4, din5, din8, din9
-            //   16L: din0, din1, din4, din5, din8, din9, din12, din13
-            // Drive per-lane-per-cycle data: din[n] = n + cycle * 16
-            // ALL active lanes have data (not just lane 0,1 per group)
-            // Active lanes per mode:
-            //   4L:  din0..din3
-            //   8L:  din0..din7
-            //   12L: din0..din11
-            //   16L: din0..din15
+            // Drive NUM_CYCLES of per-lane-per-cycle data (one continuous burst)
+            // din[n] = n + cycle * 16 (for all active lanes)
             for (c = 0; c < NUM_CYCLES; c = c + 1) begin
-                @(posedge clk_slow);
+                @(negedge clk_slow);
                 valid_in = 1;
 
-                // Group A lower: lane 0-3 (always active)
+                // Group A lower: lanes 0-3 (always active)
                 din0 = 8'(0 + c * 16);
                 din1 = 8'(1 + c * 16);
                 din2 = 8'(2 + c * 16);
                 din3 = 8'(3 + c * 16);
-                stored[0][c] = 8'(0 + c * 16);
-                stored[1][c] = 8'(1 + c * 16);
-                stored[2][c] = 8'(2 + c * 16);
-                stored[3][c] = 8'(3 + c * 16);
 
-                // Group A upper: lane 4-7 (active for 8L/12L/16L)
+                // Group A upper: lanes 4-7 (active for 8L/12L/16L)
                 if (mode >= 2'b01) begin
                     din4 = 8'(4 + c * 16);
                     din5 = 8'(5 + c * 16);
@@ -374,12 +506,8 @@ module tb_loopback_desched_top;
                 end else begin
                     din4 = 0; din5 = 0; din6 = 0; din7 = 0;
                 end
-                stored[4][c] = (mode >= 2'b01) ? 8'(4 + c * 16) : 8'd0;
-                stored[5][c] = (mode >= 2'b01) ? 8'(5 + c * 16) : 8'd0;
-                stored[6][c] = (mode >= 2'b01) ? 8'(6 + c * 16) : 8'd0;
-                stored[7][c] = (mode >= 2'b01) ? 8'(7 + c * 16) : 8'd0;
 
-                // Group B lower: lane 8-11 (active for 12L/16L)
+                // Group B lower: lanes 8-11 (active for 12L/16L)
                 if (mode >= 2'b10) begin
                     din8  = 8'(8  + c * 16);
                     din9  = 8'(9  + c * 16);
@@ -388,12 +516,8 @@ module tb_loopback_desched_top;
                 end else begin
                     din8 = 0; din9 = 0; din10 = 0; din11 = 0;
                 end
-                stored[8][c]  = (mode >= 2'b10) ? 8'(8  + c * 16) : 8'd0;
-                stored[9][c]  = (mode >= 2'b10) ? 8'(9  + c * 16) : 8'd0;
-                stored[10][c] = (mode >= 2'b10) ? 8'(10 + c * 16) : 8'd0;
-                stored[11][c] = (mode >= 2'b10) ? 8'(11 + c * 16) : 8'd0;
 
-                // Group B upper: lane 12-15 (active for 16L only)
+                // Group B upper: lanes 12-15 (active for 16L only)
                 if (mode == 2'b11) begin
                     din12 = 8'(12 + c * 16);
                     din13 = 8'(13 + c * 16);
@@ -402,42 +526,40 @@ module tb_loopback_desched_top;
                 end else begin
                     din12 = 0; din13 = 0; din14 = 0; din15 = 0;
                 end
-                stored[12][c] = (mode == 2'b11) ? 8'(12 + c * 16) : 8'd0;
-                stored[13][c] = (mode == 2'b11) ? 8'(13 + c * 16) : 8'd0;
-                stored[14][c] = (mode == 2'b11) ? 8'(14 + c * 16) : 8'd0;
-                stored[15][c] = (mode == 2'b11) ? 8'(15 + c * 16) : 8'd0;
             end
 
-            // Deassert valid_in
-            @(posedge clk_slow);
+            // Deassert valid_in -> line ends
+            @(negedge clk_slow);
             clear_inputs;
 
             // Wait for pipeline to drain (generous: 100 slow cycles)
             repeat(100) @(posedge clk_slow);
 
-            // Disable checking
-            checking_en = 0;
+            // Disable dumper
+            dumper_en = 0;
+
+            // Post-sim golden compare
+            compare_results(mode);
 
             // Report
-            // Pipeline fill costs 1 output (latency skip), so expect NUM_CYCLES-1
-            expected_a = NUM_CYCLES - 1;
-            expected_b = (mode[1]) ? (NUM_CYCLES - 1) : 0;
             mode_pass = 1;
 
-            $display("  Group A: checked %0d / %0d expected", check_cnt_a, expected_a);
-            if (expected_b > 0)
-                $display("  Group B: checked %0d / %0d expected", check_cnt_b, expected_b);
+            $display("  ---");
+            $display("  Golden lines:   %0d", golden_line_cnt);
+            $display("  Capture A lines: %0d", cap_a_line_cnt);
+            if (mode[1])
+                $display("  Capture B lines: %0d", cap_b_line_cnt);
+            $display("  Mismatches:     %0d", mismatch_cnt);
 
-            if (check_cnt_a < expected_a) begin
-                $display("  FAIL: Group A output count insufficient (%0d < %0d)", check_cnt_a, expected_a);
+            if (cap_a_line_cnt == 0) begin
+                $display("  FAIL: Group A captured 0 lines");
                 mode_pass = 0;
             end
-            if (expected_b > 0 && check_cnt_b < expected_b) begin
-                $display("  FAIL: Group B output count insufficient (%0d < %0d)", check_cnt_b, expected_b);
+            if (mode[1] && cap_b_line_cnt == 0) begin
+                $display("  FAIL: Group B captured 0 lines");
                 mode_pass = 0;
             end
             if (mismatch_cnt > 0) begin
-                $display("  FAIL: %0d mismatches detected", mismatch_cnt);
                 mode_pass = 0;
             end
 
@@ -458,7 +580,7 @@ module tb_loopback_desched_top;
         rst_n = 0;
         lane_mode = 2'b00;
         slow_half = CLK_FAST_HALF;
-        checking_en = 0;
+        dumper_en = 0;
         clear_inputs;
 
         //                  name             mode    ratio
