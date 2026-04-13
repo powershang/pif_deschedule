@@ -344,64 +344,68 @@ module tb_loopback_desched_top;
             //   8L:  din0, din1, din4, din5
             //   12L: din0, din1, din4, din5, din8, din9
             //   16L: din0, din1, din4, din5, din8, din9, din12, din13
+            // Drive per-lane-per-cycle data: din[n] = n + cycle * 16
+            // ALL active lanes have data (not just lane 0,1 per group)
+            // Active lanes per mode:
+            //   4L:  din0..din3
+            //   8L:  din0..din7
+            //   12L: din0..din11
+            //   16L: din0..din15
             for (c = 0; c < NUM_CYCLES; c = c + 1) begin
                 @(posedge clk_slow);
                 valid_in = 1;
 
-                // Lane 0,1 always active
+                // Group A lower: lane 0-3 (always active)
                 din0 = 8'(0 + c * 16);
                 din1 = 8'(1 + c * 16);
-                din2 = 0;
-                din3 = 0;
+                din2 = 8'(2 + c * 16);
+                din3 = 8'(3 + c * 16);
                 stored[0][c] = 8'(0 + c * 16);
                 stored[1][c] = 8'(1 + c * 16);
-                stored[2][c] = 0;
-                stored[3][c] = 0;
+                stored[2][c] = 8'(2 + c * 16);
+                stored[3][c] = 8'(3 + c * 16);
 
-                // Lane 4,5 active for 8L/12L/16L
+                // Group A upper: lane 4-7 (active for 8L/12L/16L)
                 if (mode >= 2'b01) begin
                     din4 = 8'(4 + c * 16);
                     din5 = 8'(5 + c * 16);
+                    din6 = 8'(6 + c * 16);
+                    din7 = 8'(7 + c * 16);
                 end else begin
-                    din4 = 0;
-                    din5 = 0;
+                    din4 = 0; din5 = 0; din6 = 0; din7 = 0;
                 end
-                din6 = 0;
-                din7 = 0;
                 stored[4][c] = (mode >= 2'b01) ? 8'(4 + c * 16) : 8'd0;
                 stored[5][c] = (mode >= 2'b01) ? 8'(5 + c * 16) : 8'd0;
-                stored[6][c] = 0;
-                stored[7][c] = 0;
+                stored[6][c] = (mode >= 2'b01) ? 8'(6 + c * 16) : 8'd0;
+                stored[7][c] = (mode >= 2'b01) ? 8'(7 + c * 16) : 8'd0;
 
-                // Lane 8,9 active for 12L/16L
+                // Group B lower: lane 8-11 (active for 12L/16L)
                 if (mode >= 2'b10) begin
-                    din8  = 8'(8 + c * 16);
-                    din9  = 8'(9 + c * 16);
+                    din8  = 8'(8  + c * 16);
+                    din9  = 8'(9  + c * 16);
+                    din10 = 8'(10 + c * 16);
+                    din11 = 8'(11 + c * 16);
                 end else begin
-                    din8  = 0;
-                    din9  = 0;
+                    din8 = 0; din9 = 0; din10 = 0; din11 = 0;
                 end
-                din10 = 0;
-                din11 = 0;
                 stored[8][c]  = (mode >= 2'b10) ? 8'(8  + c * 16) : 8'd0;
                 stored[9][c]  = (mode >= 2'b10) ? 8'(9  + c * 16) : 8'd0;
-                stored[10][c] = 0;
-                stored[11][c] = 0;
+                stored[10][c] = (mode >= 2'b10) ? 8'(10 + c * 16) : 8'd0;
+                stored[11][c] = (mode >= 2'b10) ? 8'(11 + c * 16) : 8'd0;
 
-                // Lane 12,13 active for 16L
+                // Group B upper: lane 12-15 (active for 16L only)
                 if (mode == 2'b11) begin
                     din12 = 8'(12 + c * 16);
                     din13 = 8'(13 + c * 16);
+                    din14 = 8'(14 + c * 16);
+                    din15 = 8'(15 + c * 16);
                 end else begin
-                    din12 = 0;
-                    din13 = 0;
+                    din12 = 0; din13 = 0; din14 = 0; din15 = 0;
                 end
-                din14 = 0;
-                din15 = 0;
                 stored[12][c] = (mode == 2'b11) ? 8'(12 + c * 16) : 8'd0;
                 stored[13][c] = (mode == 2'b11) ? 8'(13 + c * 16) : 8'd0;
-                stored[14][c] = 0;
-                stored[15][c] = 0;
+                stored[14][c] = (mode == 2'b11) ? 8'(14 + c * 16) : 8'd0;
+                stored[15][c] = (mode == 2'b11) ? 8'(15 + c * 16) : 8'd0;
             end
 
             // Deassert valid_in
