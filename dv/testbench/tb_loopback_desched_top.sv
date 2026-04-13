@@ -354,7 +354,70 @@ module tb_loopback_desched_top;
         begin
             mm = 0;
 
-            // --- Group A ---
+            // --- Dump golden and capture data ---
+            $display("");
+            $display("  === GOLDEN (input to scheduler_top) ===");
+            for (line = 0; line < golden_line_cnt; line = line + 1) begin
+                g_base = line * MAX_LINE_LEN;
+                $display("  Golden Line %0d (%0d cycles):", line, golden_line_len[line]);
+                for (cyc = 0; cyc < golden_line_len[line]; cyc = cyc + 1)
+                    $display("    [%02d] L0=%02h L1=%02h L2=%02h L3=%02h L4=%02h L5=%02h L6=%02h L7=%02h",
+                        cyc,
+                        golden_a[g_base+cyc][0], golden_a[g_base+cyc][1],
+                        golden_a[g_base+cyc][2], golden_a[g_base+cyc][3],
+                        golden_a[g_base+cyc][4], golden_a[g_base+cyc][5],
+                        golden_a[g_base+cyc][6], golden_a[g_base+cyc][7]);
+            end
+
+            $display("");
+            $display("  === CAPTURE (output of reverse_transpose A) ===");
+            for (line = 0; line < cap_a_line_cnt; line = line + 1) begin
+                c_base = line * MAX_LINE_LEN;
+                $display("  Capture Line %0d (%0d cycles):", line, cap_a_line_len[line]);
+                for (cyc = 0; cyc < cap_a_line_len[line]; cyc = cyc + 1)
+                    $display("    [%02d] L0=%02h L1=%02h L2=%02h L3=%02h L4=%02h L5=%02h L6=%02h L7=%02h",
+                        cyc,
+                        cap_a[c_base+cyc][0], cap_a[c_base+cyc][1],
+                        cap_a[c_base+cyc][2], cap_a[c_base+cyc][3],
+                        cap_a[c_base+cyc][4], cap_a[c_base+cyc][5],
+                        cap_a[c_base+cyc][6], cap_a[c_base+cyc][7]);
+            end
+
+            $display("");
+
+            // --- Dump Group B if active ---
+            if (mode[1]) begin
+                $display("");
+                $display("  === GOLDEN Group B (lanes 8-15) ===");
+                for (line = 0; line < golden_line_cnt; line = line + 1) begin
+                    g_base = line * MAX_LINE_LEN;
+                    $display("  Golden B Line %0d (%0d cycles):", line, golden_line_len[line]);
+                    for (cyc = 0; cyc < golden_line_len[line]; cyc = cyc + 1)
+                        $display("    [%02d] L8=%02h L9=%02h L10=%02h L11=%02h L12=%02h L13=%02h L14=%02h L15=%02h",
+                            cyc,
+                            golden_b[g_base+cyc][0], golden_b[g_base+cyc][1],
+                            golden_b[g_base+cyc][2], golden_b[g_base+cyc][3],
+                            golden_b[g_base+cyc][4], golden_b[g_base+cyc][5],
+                            golden_b[g_base+cyc][6], golden_b[g_base+cyc][7]);
+                end
+
+                $display("");
+                $display("  === CAPTURE Group B (output of reverse_transpose B) ===");
+                for (line = 0; line < cap_b_line_cnt; line = line + 1) begin
+                    c_base = line * MAX_LINE_LEN;
+                    $display("  Capture B Line %0d (%0d cycles):", line, cap_b_line_len[line]);
+                    for (cyc = 0; cyc < cap_b_line_len[line]; cyc = cyc + 1)
+                        $display("    [%02d] L8=%02h L9=%02h L10=%02h L11=%02h L12=%02h L13=%02h L14=%02h L15=%02h",
+                            cyc,
+                            cap_b[c_base+cyc][0], cap_b[c_base+cyc][1],
+                            cap_b[c_base+cyc][2], cap_b[c_base+cyc][3],
+                            cap_b[c_base+cyc][4], cap_b[c_base+cyc][5],
+                            cap_b[c_base+cyc][6], cap_b[c_base+cyc][7]);
+                end
+                $display("");
+            end
+
+            // --- Group A compare ---
             $display("  Group A: golden %0d lines, capture %0d lines", golden_line_cnt, cap_a_line_cnt);
 
             for (line = 0; line < cap_a_line_cnt; line = line + 1) begin
