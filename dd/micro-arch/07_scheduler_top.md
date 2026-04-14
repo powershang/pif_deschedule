@@ -2,7 +2,7 @@
 
 ## Function
 
-Top-level serialization block. Combines 4N-alignment, chunk accumulation, and scheduling into one module.
+Top-level serialization block. Combines 8N-alignment, chunk accumulation, and scheduling into one module.
 
 ## Interface
 
@@ -32,6 +32,6 @@ din[0:15] → [u_align] → [u_out] → [u_sched] → dout[0:3]
 
 | Instance | Module | Function |
 |----------|--------|----------|
-| u_align | lanedata_4n_align_process | Burst padding to 4N |
+| u_align | lanedata_8n_align_process | Burst padding to 8N |
 | u_out | inplace_transpose_buf_multi_lane_out | Chunk accumulation (2× 8lane_2beat) |
 | u_sched | inplace_transpose_buf_multi_lane_scheduler | N→4 serialization |

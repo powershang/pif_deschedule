@@ -1,0 +1,65 @@
+[*]
+[*] GTKWave Analyzer — tb_8n_align
+[*] Unit test for lanedata_8n_align_process
+[*] 9 cases: rem=0..7 + back-to-back
+[*]
+[dumpfile] "wave_8n_align.vcd"
+[timestart] 0
+[size] 1920 1080
+[pos] 0 0
+*-22.000000 200 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1
+
+[*] ============ Clock & Control ============
+@28
+tb_8n_align.clk
+tb_8n_align.rst_n
+@22
+tb_8n_align.virtual_lane_en
+
+[*] ============ Input ============
+@28
+tb_8n_align.valid_in
+@22
+tb_8n_align.din[0][7:0]
+tb_8n_align.din[1][7:0]
+tb_8n_align.din[2][7:0]
+tb_8n_align.din[3][7:0]
+tb_8n_align.din[4][7:0]
+tb_8n_align.din[5][7:0]
+tb_8n_align.din[6][7:0]
+tb_8n_align.din[7][7:0]
+tb_8n_align.din[15][7:0]
+
+[*] ============ Output ============
+@28
+tb_8n_align.valid_out
+tb_8n_align.error_flag
+@22
+tb_8n_align.dout[0][7:0]
+tb_8n_align.dout[1][7:0]
+tb_8n_align.dout[2][7:0]
+tb_8n_align.dout[3][7:0]
+tb_8n_align.dout[4][7:0]
+tb_8n_align.dout[5][7:0]
+tb_8n_align.dout[6][7:0]
+tb_8n_align.dout[7][7:0]
+tb_8n_align.dout[15][7:0]
+
+[*] ============ DUT Internal — Beat/Pad FSM ============
+@22
+tb_8n_align.dut.beat_mod_q[2:0]
+tb_8n_align.dut.pad_active_q
+tb_8n_align.dut.pad_left_q[2:0]
+tb_8n_align.dut.replay_idx_q
+tb_8n_align.dut.tail_buf_top_q
+@28
+tb_8n_align.dut.prev_valid_q
+tb_8n_align.dut.error_flag_q
+
+[*] ============ DUT Internal — Tail Buffer (Lane 0) ============
+@22
+tb_8n_align.dut.tail_buf[0][0][7:0]
+tb_8n_align.dut.tail_buf[1][0][7:0]
+
+[pattern_trace] 1
+[pattern_trace] 0

@@ -14,36 +14,36 @@ All RTL files are in `dd/rtl/*.v`, testbenches in `dv/testbench/*.sv`.
 
 ## Test List
 
-### 1. tb_4n_align
+### 1. tb_8n_align
 
-**DUT**: `lanedata_4n_align_process`
+**DUT**: `lanedata_8n_align_process`
 
-**RTL files**: `lanedata_4n_align_process.v`
+**RTL files**: `lanedata_8n_align_process.v`
 
-**驗證目標**: Burst padding 邏輯在 PHY / VLANE 各種 remainder 下的正確性。
+**驗證目標**: Burst padding 邏輯將任意長度 burst 對齊至 8N，padding pattern
+固定為 `cN, c_{N-1}, cN, c_{N-1}, ...`（從 cN 起頭交替）。`virtual_lane_en`
+不影響行為（為端口相容性保留）。
 
-| Sub-case | Mode | Burst len | Remainder | Expected output len | error_flag | Check |
-|----------|------|-----------|-----------|-------------------|------------|-------|
-| PHY len=4 | PHY | 4 | 0 | 4 | 0 | count + continuity + data |
-| PHY len=8 | PHY | 8 | 0 | 8 | 0 | count + continuity + data |
-| PHY len=6 | PHY | 6 | 2 | 8 | 0 | count + continuity + pad pattern (repeat last 2) |
-| PHY len=10 | PHY | 10 | 2 | 12 | 0 | count + continuity + pad pattern |
-| PHY len=5 | PHY | 5 | 1 | 8 | 1 | count + continuity + pad pattern (repeat last 1) |
-| PHY len=3 | PHY | 3 | 3 | 4 | 1 | count + continuity + pad pattern |
-| PHY len=7 | PHY | 7 | 3 | 8 | 1 | count + continuity + pad pattern |
-| VLANE len=4 | VLANE | 4 | even | 4 | 0 | count + continuity + data |
-| VLANE len=6 | VLANE | 6 | even | 6 | 0 | count + continuity + data |
-| VLANE len=2 | VLANE | 2 | even | 2 | 0 | count + continuity + data |
-| VLANE len=5 | VLANE | 5 | odd | 6 | 1 | count + continuity + pad pattern (repeat last 1) |
-| VLANE len=3 | VLANE | 3 | odd | 4 | 1 | count + continuity + pad pattern |
-| VLANE len=7 | VLANE | 7 | odd | 8 | 1 | count + continuity + pad pattern |
+| Sub-case | Burst len | rem (mod 8) | pad_total | Expected output len | error_flag | Check |
+|----------|-----------|-------------|-----------|---------------------|------------|-------|
+| len=8   | 8  | 0 | 0 | 8  | 0 | count + continuity + data |
+| len=16  | 16 | 0 | 0 | 16 | 0 | count + continuity + data |
+| len=2   | 2  | 2 | 6 | 8  | 0 | count + continuity + pad pattern (cN,c_{N-1} x3) |
+| len=6   | 6  | 6 | 2 | 8  | 0 | count + continuity + pad pattern (cN,c_{N-1}) |
+| len=4   | 4  | 4 | 4 | 8  | 0 | count + continuity + pad pattern (cN,c_{N-1} x2) |
+| len=10  | 10 | 2 | 6 | 16 | 0 | count + continuity + pad pattern |
+| len=14  | 14 | 6 | 2 | 16 | 0 | count + continuity + pad pattern |
+| len=1   | 1  | 1 | 7 | 8  | 1 | count + continuity + pad pattern (error, cN only in buf) |
+| len=3   | 3  | 3 | 5 | 8  | 1 | count + continuity + pad pattern |
+| len=5   | 5  | 5 | 3 | 8  | 1 | count + continuity + pad pattern (cN,c_{N-1},cN) |
+| len=7   | 7  | 7 | 1 | 8  | 1 | count + continuity + pad pattern (cN only) |
 
 **Check 項目**:
-- Output count 正確
+- Output count 正確（對齊到 8N）
 - valid_out 連續（無 gap）
 - Passthrough data 與 input 一致
-- Pad content 符合 repeat pattern
-- error_flag 正確
+- Pad content 符合交替 pattern (cN, c_{N-1}, cN, ...)
+- error_flag: rem 偶數為 0，rem 奇數為 1，burst 內 sticky
 
 ---
 
@@ -169,7 +169,7 @@ All RTL files are in `dd/rtl/*.v`, testbenches in `dv/testbench/*.sv`.
 
 **DUT**: `inplace_transpose_buf_multi_lane_scheduler_top` (align + out + scheduler)
 
-**RTL files**: `lanedata_4n_align_process.v`, `inplace_transpose_buf_8lane_2beat.v`, `inplace_transpose_buf_multi_lane_out.v`, `inplace_transpose_buf_multi_lane_scheduler.v`, `inplace_transpose_buf_multi_lane_scheduler_top.v`
+**RTL files**: `lanedata_8n_align_process.v`, `inplace_transpose_buf_8lane_2beat.v`, `inplace_transpose_buf_multi_lane_out.v`, `inplace_transpose_buf_multi_lane_scheduler.v`, `inplace_transpose_buf_multi_lane_scheduler_top.v`
 
 **驗證目標**: 完整 scheduler top 在所有 8 種 config (4 lane modes × PHY/VLANE) 下的 end-to-end 正確性。
 
@@ -202,7 +202,7 @@ All RTL files are in `dd/rtl/*.v`, testbenches in `dv/testbench/*.sv`.
 
 | # | TB | DUT | Cases | Status |
 |---|----|-----|-------|--------|
-| 1 | tb_4n_align | lanedata_4n_align_process | 13 | ALL PASS |
+| 1 | tb_8n_align | lanedata_8n_align_process | 11 | (pending @dv rewrite) |
 | 2 | tb_inplace_transpose_buf_4lane_2beat | 4lane_2beat (deprecated) | 2 | ALL PASS |
 | 3 | tb_inplace_transpose_buf_8lane_2beat | 8lane_2beat | 4 | ALL PASS |
 | 4 | tb_4lane | descheduler (4L) | 1 | PASS |

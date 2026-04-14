@@ -2,8 +2,8 @@
 
 // =============================================================================
 // Module: inplace_transpose_buf_multi_lane_scheduler_top
-// Description: 4N-Align + Multi-lane Output Pack + Scheduler combined block
-//   - u_align:  burst padding to 4N
+// Description: 8N-Align + Multi-lane Output Pack + Scheduler combined block
+//   - u_align:  burst padding to 8N (cN / c_{N-1} alternating pad)
 //   - u_out:    chunk accumulation (2x 8lane_2beat instances)
 //   - u_sched:  N-lane slow → 4-lane fast serialization
 // =============================================================================
@@ -49,7 +49,7 @@ module inplace_transpose_buf_multi_lane_scheduler_top (
     wire  [DATA_W-1:0] align_dout8, align_dout9, align_dout10, align_dout11;
     wire  [DATA_W-1:0] align_dout12, align_dout13, align_dout14, align_dout15;
 
-    lanedata_4n_align_process #(.DATA_W(DATA_W)) u_align (
+    lanedata_8n_align_process #(.DATA_W(DATA_W)) u_align (
         .clk(clk_in), .rst_n(rst_n),
         .valid_in(valid_in), .virtual_lane_en(virtual_lane_en),
         .din0(din0), .din1(din1), .din2(din2), .din3(din3),

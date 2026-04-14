@@ -83,7 +83,7 @@ The descheduler uses a two-stage pipeline to convert 4-lane serialized data back
 
 ```
 scheduler_top
-├── lanedata_4n_align_process      # burst padding to 4N
+├── lanedata_8n_align_process      # burst padding to 8N
 ├── inplace_transpose_buf_multi_lane_out  # chunk accumulation
 │   ├── inplace_transpose_buf_8lane_2beat (u_buf_a)
 │   └── inplace_transpose_buf_8lane_2beat (u_buf_b)
