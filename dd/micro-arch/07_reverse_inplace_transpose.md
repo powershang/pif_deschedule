@@ -13,6 +13,7 @@ Each input beat writes one row (LANE8) or half a row (LANE4) into the write buff
 | clk | in | 1 | Clock (= descheduler clk_out, slow clock) |
 | rst_n | in | 1 | Active-low async reset |
 | lane_cfg | in | 1 | 0=LANE8 (8 lanes), 1=LANE4 (4 lanes) |
+| mode | in | 1 | 0=MODE_PHY (physical-lane chunk), 1=MODE_VLANE (virtual-lane chunk) |
 | valid_in | in | 1 | Input valid (chunk data from descheduler) |
 | din_top0..3 | in | DATA_W | Top 4 samples of chunk |
 | din_bot0..3 | in | DATA_W | Bottom 4 samples of chunk (0 in LANE4 mode) |
@@ -151,6 +152,86 @@ rd_col=1: dout = {L0[1], L1[1], L2[1], L3[1], 0, 0, 0, 0}
 ```
 
 Rows 4-7 are zero (only 4 lanes), so dout4..7 = 0.
+
+## MODE_VLANE (virtual-lane chunk)
+
+When `mode == 1`, the chunk format carried on `{din_top0..3, din_bot0..3}` represents **one vlane** (= a pair of physical lanes 2*v and 2*v+1) sampled over 4 consecutive input cycles. This is the symmetric inverse of the forward scheduler's VLANE path.
+
+### Chunk layout
+
+```
+chunk[0] = din_top0 = physical lane 2*v at input cycle 0
+chunk[1] = din_top1 = physical lane 2*v+1 at input cycle 0
+chunk[2] = din_top2 = physical lane 2*v at input cycle 1
+chunk[3] = din_top3 = physical lane 2*v+1 at input cycle 1
+chunk[4] = din_bot0 = physical lane 2*v at input cycle 2
+chunk[5] = din_bot1 = physical lane 2*v+1 at input cycle 2
+chunk[6] = din_bot2 = physical lane 2*v at input cycle 3
+chunk[7] = din_bot3 = physical lane 2*v+1 at input cycle 3
+```
+
+Because one chunk only covers 4 of the 8 output cycles, **two chunks per vlane** are needed to fill the 8 columns of one buffer row.
+
+### Beat scheduling
+
+Each beat is indexed by a 3-bit counter `vl_beat`. The counter bits map to:
+
+- **LANE8 VLANE** (4 active vlanes): `vl_beat[2] = half (0 = cols[0..3], 1 = cols[4..7])`, `vl_beat[1:0] = vlane index (0..3)`. Beat order: `v0,v1,v2,v3,v0,v1,v2,v3` → 8 beats per buffer.
+- **LANE4 VLANE** (2 active vlanes): `vl_beat[1] = half`, `vl_beat[0] = vlane index (0..1)`. Beat order: `v0,v1,v0,v1` → 4 beats per buffer. Rows 4..7 of the target buffer are zero-filled at `vl_beat==0` so that dout4..7 emit 0.
+
+### Write mapping
+
+For each beat, let `row_lo = 2*vlane`, `row_hi = 2*vlane+1`, `col_base = half ? 4 : 0`:
+
+```
+buf[row_lo][col_base + 0] <= chunk[0]   // din_top0
+buf[row_lo][col_base + 1] <= chunk[2]   // din_top2
+buf[row_lo][col_base + 2] <= chunk[4]   // din_bot0
+buf[row_lo][col_base + 3] <= chunk[6]   // din_bot2
+buf[row_hi][col_base + 0] <= chunk[1]   // din_top1
+buf[row_hi][col_base + 1] <= chunk[3]   // din_top3
+buf[row_hi][col_base + 2] <= chunk[5]   // din_bot1
+buf[row_hi][col_base + 3] <= chunk[7]   // din_bot3
+```
+
+After the buffer is full, the column-wise read path (unchanged) restores the original per-lane-per-cycle stream.
+
+### LANE8 VLANE Example
+
+Input stream (one vlane chunk per beat, two halves per vlane):
+
+```
+beat0: vlane0 first half  (covers input cycles 0..3 of phys lanes 0,1)
+beat1: vlane1 first half  (phys lanes 2,3)
+beat2: vlane2 first half  (phys lanes 4,5)
+beat3: vlane3 first half  (phys lanes 6,7)
+beat4: vlane0 second half (covers input cycles 4..7 of phys lanes 0,1)
+beat5: vlane1 second half
+beat6: vlane2 second half
+beat7: vlane3 second half
+```
+
+Buffer contents after fill (row = physical lane, col = input cycle):
+
+```
+row0:  L0[0]  L0[1]  L0[2]  L0[3]  L0[4]  L0[5]  L0[6]  L0[7]
+row1:  L1[0]  L1[1]  L1[2]  L1[3]  L1[4]  L1[5]  L1[6]  L1[7]
+...
+row7:  L7[0]  L7[1]  L7[2]  L7[3]  L7[4]  L7[5]  L7[6]  L7[7]
+```
+
+Column-wise readout emits all 8 physical lanes at each output cycle, identical to LANE8 MODE_PHY.
+
+### LANE4 VLANE Example
+
+Beat order `v0,v1,v0,v1` (4 beats). After fill:
+
+```
+row0..3: phys lanes L0..L3, cols 0..7 populated
+row4..7: zero
+```
+
+Readout produces `{L0[k], L1[k], L2[k], L3[k], 0, 0, 0, 0}` for k = 0..7.
 
 ## Error Handling
 

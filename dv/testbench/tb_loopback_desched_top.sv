@@ -63,6 +63,7 @@ module tb_loopback_desched_top;
     // Signals
     // =========================================================================
     logic [1:0]        lane_mode;
+    logic              virtual_lane_en;
     logic              valid_in;
     logic [DATA_W-1:0] din0,  din1,  din2,  din3;
     logic [DATA_W-1:0] din4,  din5,  din6,  din7;
@@ -105,7 +106,7 @@ module tb_loopback_desched_top;
     // =========================================================================
     inplace_transpose_buf_multi_lane_scheduler_top #(.DATA_W(DATA_W)) u_sched_top (
         .clk_in(clk_slow), .clk_out(clk_fast), .rst_n(rst_n),
-        .valid_in(valid_in), .lane_mode(lane_mode), .virtual_lane_en(1'b0),
+        .valid_in(valid_in), .lane_mode(lane_mode), .virtual_lane_en(virtual_lane_en),
         .din0(din0),   .din1(din1),   .din2(din2),   .din3(din3),
         .din4(din4),   .din5(din5),   .din6(din6),   .din7(din7),
         .din8(din8),   .din9(din9),   .din10(din10), .din11(din11),
@@ -142,7 +143,7 @@ module tb_loopback_desched_top;
     // =========================================================================
     reverse_inplace_transpose #(.DATA_W(DATA_W)) u_rev_a (
         .clk(clk_slow), .rst_n(rst_n),
-        .lane_cfg(rev_a_lane_cfg), .valid_in(ds_valid_out),
+        .lane_cfg(rev_a_lane_cfg), .mode(virtual_lane_en), .valid_in(ds_valid_out),
         .din_top0(ds_a_top0), .din_top1(ds_a_top1),
         .din_top2(ds_a_top2), .din_top3(ds_a_top3),
         .din_bot0(ds_a_bot0), .din_bot1(ds_a_bot1),
@@ -157,7 +158,7 @@ module tb_loopback_desched_top;
     // =========================================================================
     reverse_inplace_transpose #(.DATA_W(DATA_W)) u_rev_b (
         .clk(clk_slow), .rst_n(rst_n),
-        .lane_cfg(rev_b_lane_cfg), .valid_in(rev_b_valid_in),
+        .lane_cfg(rev_b_lane_cfg), .mode(virtual_lane_en), .valid_in(rev_b_valid_in),
         .din_top0(ds_b_top0), .din_top1(ds_b_top1),
         .din_top2(ds_b_top2), .din_top3(ds_b_top3),
         .din_bot0(ds_b_bot0), .din_bot1(ds_b_bot1),
@@ -523,16 +524,18 @@ module tb_loopback_desched_top;
         input [255:0] name;
         input [1:0]   mode;
         input integer ratio;
+        input         vlane_en;
         integer c;
         integer mode_pass;
         begin
             $display("\n========================================");
-            $display("--- %0s (mode=%0b, ratio=%0d) ---", name, mode, ratio);
+            $display("--- %0s (mode=%0b, ratio=%0d, vlane=%0d) ---", name, mode, ratio, vlane_en);
             $display("========================================");
 
             // Setup
-            lane_mode    = mode;
-            slow_half    = ratio * CLK_FAST_HALF;
+            lane_mode       = mode;
+            virtual_lane_en = vlane_en;
+            slow_half       = ratio * CLK_FAST_HALF;
             mismatch_cnt = 0;
             dumper_en    = 0;
 
@@ -642,19 +645,25 @@ module tb_loopback_desched_top;
         fail_total = 0;
         rst_n = 0;
         lane_mode = 2'b00;
+        virtual_lane_en = 1'b0;
         slow_half = CLK_FAST_HALF;
         dumper_en = 0;
         clear_inputs;
 
-        //                  name             mode    ratio
-        run_mode("4L  PHY",  2'b00,  1);
-        run_mode("8L  PHY",  2'b01,  2);
-        run_mode("12L PHY",  2'b10,  3);
-        run_mode("16L PHY",  2'b11,  4);
+        //                  name             mode    ratio  vlane
+        run_mode("4L  PHY",   2'b00,  1, 0);
+        run_mode("8L  PHY",   2'b01,  2, 0);
+        run_mode("12L PHY",   2'b10,  3, 0);
+        run_mode("16L PHY",   2'b11,  4, 0);
+
+        run_mode("4L  VLANE", 2'b00,  1, 1);
+        run_mode("8L  VLANE", 2'b01,  2, 1);
+        run_mode("12L VLANE", 2'b10,  3, 1);
+        run_mode("16L VLANE", 2'b11,  4, 1);
 
         $display("\n============================================");
         if (fail_total == 0)
-            $display("[PASS] ALL LOOPBACK DESCHED_TOP TESTS PASSED (4 modes, %0d input cycles each)", NUM_CYCLES);
+            $display("[PASS] ALL LOOPBACK DESCHED_TOP TESTS PASSED (8 modes, %0d input cycles each)", NUM_CYCLES);
         else
             $display("[FAIL] %0d mode(s) failed", fail_total);
         $display("============================================");
@@ -665,8 +674,8 @@ module tb_loopback_desched_top;
     // Timeout
     // =========================================================================
     initial begin
-        #200000;
-        $display("[TIMEOUT] Simulation exceeded 200000ns");
+        #600000;
+        $display("[TIMEOUT] Simulation exceeded 600000ns");
         $finish;
     end
 

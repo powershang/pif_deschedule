@@ -12,6 +12,7 @@ Top-level deserialization block. Two-stage descheduler + lane compactor + revers
 | clk_out | in | 1 | Slow clock (N-lane restored output side) |
 | rst_n | in | 1 | Active-low async reset |
 | lane_mode | in | 2 | 00=4L, 01=8L, 10=12L, 11=16L |
+| virtual_lane_en | in | 1 | 0=MODE_PHY chunk format, 1=MODE_VLANE chunk format (matches forward scheduler `mode`). Fed as `mode` to both `u_rev_a` and `u_rev_b`. |
 | valid_in | in | 1 | Serialized input valid (clk_in domain) |
 | din0..din3 | in | DATA_W | 4-lane serialized input |
 | valid_out | out | 1 | Restored output valid (clk_out domain) |
@@ -84,6 +85,17 @@ wire b_valid = ds_valid_out & lane_mode[1];
 ```
 
 For 4L/8L modes, `b_valid` is always 0, so `u_rev_b` receives no input and produces no output. This avoids spurious buffer fills from zero data.
+
+## Virtual-Lane Mode (`virtual_lane_en`)
+
+The top-level `virtual_lane_en` signal is forwarded as the `mode` input to both reverse-transpose instances, symmetric to the forward scheduler's `mode` input. It does not affect stage-1 descheduler behavior — the stage-1 chunk output is the same regardless of PHY/VLANE, and the format distinction is fully absorbed by the reverse transpose write path.
+
+| virtual_lane_en | u_rev_a mode | u_rev_b mode | Expected chunk source |
+|-----------------|--------------|--------------|-----------------------|
+| 0 | MODE_PHY | MODE_PHY | forward scheduler with `mode=MODE_PHY` (per-physical-lane rows) |
+| 1 | MODE_VLANE | MODE_VLANE | forward scheduler with `mode=MODE_VLANE` (vlane-interleaved chunks) |
+
+See `07_reverse_inplace_transpose.md` "MODE_VLANE" section for the chunk layout and write-mapping details.
 
 ## Output Mapping
 

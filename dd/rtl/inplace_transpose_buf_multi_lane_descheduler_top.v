@@ -10,7 +10,7 @@
 // =============================================================================
 
 module inplace_transpose_buf_multi_lane_descheduler_top (
-    clk_in, clk_out, rst_n, lane_mode, valid_in,
+    clk_in, clk_out, rst_n, lane_mode, virtual_lane_en, valid_in,
     din0, din1, din2, din3,
     valid_out,
     a_top0, a_top1, a_top2, a_top3,
@@ -23,6 +23,7 @@ module inplace_transpose_buf_multi_lane_descheduler_top (
 
     input              clk_in, clk_out, rst_n;
     input  [1:0]       lane_mode;
+    input              virtual_lane_en;   // 0 = MODE_PHY, 1 = MODE_VLANE
     input              valid_in;
     input  [DATA_W-1:0] din0, din1, din2, din3;
     output             valid_out;
@@ -80,6 +81,7 @@ module inplace_transpose_buf_multi_lane_descheduler_top (
         .clk       (clk_out),
         .rst_n     (rst_n),
         .lane_cfg  (lane_cfg_a),
+        .mode      (virtual_lane_en),
         .valid_in  (ds_valid_out),
         .din_top0  (ds_a_top0), .din_top1(ds_a_top1),
         .din_top2  (ds_a_top2), .din_top3(ds_a_top3),
@@ -105,6 +107,7 @@ module inplace_transpose_buf_multi_lane_descheduler_top (
         .clk       (clk_out),
         .rst_n     (rst_n),
         .lane_cfg  (lane_cfg_b),
+        .mode      (virtual_lane_en),
         .valid_in  (b_valid),
         .din_top0  (ds_b_top0), .din_top1(ds_b_top1),
         .din_top2  (ds_b_top2), .din_top3(ds_b_top3),
