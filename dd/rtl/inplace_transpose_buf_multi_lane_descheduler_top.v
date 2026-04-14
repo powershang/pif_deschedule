@@ -12,6 +12,10 @@
 module inplace_transpose_buf_multi_lane_descheduler_top (
     clk_in, clk_out, clk_out_div2, rst_n, lane_mode, virtual_lane_en, valid_in,
     din0, din1, din2, din3,
+    lane_len_0,  lane_len_1,  lane_len_2,  lane_len_3,
+    lane_len_4,  lane_len_5,  lane_len_6,  lane_len_7,
+    lane_len_8,  lane_len_9,  lane_len_10, lane_len_11,
+    lane_len_12, lane_len_13, lane_len_14, lane_len_15,
     valid_out,
     a_top0, a_top1, a_top2, a_top3,
     a_bot0, a_bot1, a_bot2, a_bot3,
@@ -20,13 +24,22 @@ module inplace_transpose_buf_multi_lane_descheduler_top (
     dbg_state, dbg_fifo_cnt
 );
     parameter DATA_W = 32;
+    parameter LEN_W  = 13;
 
     input              clk_in, clk_out, clk_out_div2, rst_n;
     input  [1:0]       lane_mode;
     input              virtual_lane_en;   // 0 = MODE_PHY, 1 = MODE_VLANE
     input              valid_in;
     input  [DATA_W-1:0] din0, din1, din2, din3;
-    output             valid_out;
+    // Per-lane length limiter (passes straight to lane_compactor).
+    // Lane <-> bit mapping (matches valid_out[15:0]):
+    //   0..3   a_top0..3      4..7   a_bot0..3
+    //   8..11  b_top0..3      12..15 b_bot0..3
+    input  [LEN_W-1:0] lane_len_0,  lane_len_1,  lane_len_2,  lane_len_3;
+    input  [LEN_W-1:0] lane_len_4,  lane_len_5,  lane_len_6,  lane_len_7;
+    input  [LEN_W-1:0] lane_len_8,  lane_len_9,  lane_len_10, lane_len_11;
+    input  [LEN_W-1:0] lane_len_12, lane_len_13, lane_len_14, lane_len_15;
+    output [15:0]      valid_out;
     output [DATA_W-1:0] a_top0, a_top1, a_top2, a_top3;
     output [DATA_W-1:0] a_bot0, a_bot1, a_bot2, a_bot3;
     output [DATA_W-1:0] b_top0, b_top1, b_top2, b_top3;
@@ -143,7 +156,7 @@ module inplace_transpose_buf_multi_lane_descheduler_top (
     // =========================================================================
     // Stage 3: Lane Compactor (unchanged)
     // =========================================================================
-    lane_compactor #(.DATA_W(DATA_W)) u_compact (
+    lane_compactor #(.DATA_W(DATA_W), .LEN_W(LEN_W)) u_compact (
         .clk_in_fast  (clk_out),
         .clk_out_slow (clk_out_div2),
         .rst_n        (rst_n),
@@ -152,6 +165,14 @@ module inplace_transpose_buf_multi_lane_descheduler_top (
         .a_bot0_in(cmp_a_bot0), .a_bot1_in(cmp_a_bot1), .a_bot2_in(cmp_a_bot2), .a_bot3_in(cmp_a_bot3),
         .b_top0_in(cmp_b_top0), .b_top1_in(cmp_b_top1), .b_top2_in(cmp_b_top2), .b_top3_in(cmp_b_top3),
         .b_bot0_in(cmp_b_bot0), .b_bot1_in(cmp_b_bot1), .b_bot2_in(cmp_b_bot2), .b_bot3_in(cmp_b_bot3),
+        .lane_len_0 (lane_len_0),  .lane_len_1 (lane_len_1),
+        .lane_len_2 (lane_len_2),  .lane_len_3 (lane_len_3),
+        .lane_len_4 (lane_len_4),  .lane_len_5 (lane_len_5),
+        .lane_len_6 (lane_len_6),  .lane_len_7 (lane_len_7),
+        .lane_len_8 (lane_len_8),  .lane_len_9 (lane_len_9),
+        .lane_len_10(lane_len_10), .lane_len_11(lane_len_11),
+        .lane_len_12(lane_len_12), .lane_len_13(lane_len_13),
+        .lane_len_14(lane_len_14), .lane_len_15(lane_len_15),
         .valid_out(valid_out),
         .a_top0(a_top0), .a_top1(a_top1), .a_top2(a_top2), .a_top3(a_top3),
         .a_bot0(a_bot0), .a_bot1(a_bot1), .a_bot2(a_bot2), .a_bot3(a_bot3),

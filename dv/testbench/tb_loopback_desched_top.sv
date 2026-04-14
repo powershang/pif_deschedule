@@ -180,13 +180,16 @@ module tb_loopback_desched_top;
     //   clk_out_slow = clk_slow_div2   (clk_slow / 2)
     // Drives both Group A and Group B (B inputs are 0 for 4L/8L modes).
     // =========================================================================
-    logic              cmp_valid_out;
+    logic [15:0]       cmp_valid_out;
     logic [DATA_W-1:0] cmp_a_top0, cmp_a_top1, cmp_a_top2, cmp_a_top3;
     logic [DATA_W-1:0] cmp_a_bot0, cmp_a_bot1, cmp_a_bot2, cmp_a_bot3;
     logic [DATA_W-1:0] cmp_b_top0, cmp_b_top1, cmp_b_top2, cmp_b_top3;
     logic [DATA_W-1:0] cmp_b_bot0, cmp_b_bot1, cmp_b_bot2, cmp_b_bot3;
 
-    lane_compactor #(.DATA_W(DATA_W)) u_compact (
+    // Per-lane length-limiter configuration, driven per test case.
+    logic [12:0] lane_len_cfg [0:15];
+
+    lane_compactor #(.DATA_W(DATA_W), .LEN_W(13)) u_compact (
         .clk_in_fast (clk_slow),
         .clk_out_slow(clk_slow_div2),
         .rst_n       (rst_n),
@@ -195,6 +198,14 @@ module tb_loopback_desched_top;
         .a_bot0_in(rev_a_d4), .a_bot1_in(rev_a_d5), .a_bot2_in(rev_a_d6), .a_bot3_in(rev_a_d7),
         .b_top0_in(rev_b_d0), .b_top1_in(rev_b_d1), .b_top2_in(rev_b_d2), .b_top3_in(rev_b_d3),
         .b_bot0_in(rev_b_d4), .b_bot1_in(rev_b_d5), .b_bot2_in(rev_b_d6), .b_bot3_in(rev_b_d7),
+        .lane_len_0 (lane_len_cfg[0]),  .lane_len_1 (lane_len_cfg[1]),
+        .lane_len_2 (lane_len_cfg[2]),  .lane_len_3 (lane_len_cfg[3]),
+        .lane_len_4 (lane_len_cfg[4]),  .lane_len_5 (lane_len_cfg[5]),
+        .lane_len_6 (lane_len_cfg[6]),  .lane_len_7 (lane_len_cfg[7]),
+        .lane_len_8 (lane_len_cfg[8]),  .lane_len_9 (lane_len_cfg[9]),
+        .lane_len_10(lane_len_cfg[10]), .lane_len_11(lane_len_cfg[11]),
+        .lane_len_12(lane_len_cfg[12]), .lane_len_13(lane_len_cfg[13]),
+        .lane_len_14(lane_len_cfg[14]), .lane_len_15(lane_len_cfg[15]),
         .valid_out(cmp_valid_out),
         .a_top0(cmp_a_top0), .a_top1(cmp_a_top1), .a_top2(cmp_a_top2), .a_top3(cmp_a_top3),
         .a_bot0(cmp_a_bot0), .a_bot1(cmp_a_bot1), .a_bot2(cmp_a_bot2), .a_bot3(cmp_a_bot3),
@@ -225,10 +236,23 @@ module tb_loopback_desched_top;
     // Compactor capture arrays (16 lanes wide). cap_c_a = Group A (lanes 0-7),
     // cap_c_b = Group B (lanes 8-15). Compactor output runs on clk_slow_div2
     // and emits cycles { 0,1, 4,5, 8,9, 12,13, 16,17, 20,21 } of the source.
+    //
+    // cap_c_a/cap_c_b are indexed by [line*MAX_LINE_LEN + slow_cycle][lane]
+    // and store the data bus on slow cycles where ANY lane was valid (the bus
+    // is shared across lanes; per-lane valid gating is decoded separately).
+    // cap_c_line_len[line] = total number of slow cycles captured in that line
+    // (i.e. from first slow-cycle any lane is valid until last one).
     reg [DATA_W-1:0] cap_c_a [0:MAX_LINES*MAX_LINE_LEN-1][0:7];
     reg [DATA_W-1:0] cap_c_b [0:MAX_LINES*MAX_LINE_LEN-1][0:7];
     integer cap_c_line_cnt;
     integer cap_c_line_len [0:MAX_LINES-1];
+
+    // Per-lane valid bit captured each slow cycle of the burst.
+    // cap_c_lv[line*MAX_LINE_LEN + slow_cycle][lane] = 1/0.
+    reg cap_c_lv [0:MAX_LINES*MAX_LINE_LEN-1][0:15];
+
+    // Per-lane beat count (how many slow cycles valid_out[lane] was 1) for each line.
+    integer cap_c_lane_cnt [0:MAX_LINES-1][0:15];
 
     // Compactor golden arrays — built post-facto from golden_a/golden_b by
     // picking cycles {0,1,4,5,8,9,12,13,16,17,20,21}.
@@ -351,17 +375,22 @@ module tb_loopback_desched_top;
     // real data. No skip/offset workaround — every beat from the rising
     // edge of cmp_valid_out is captured verbatim.
     // =========================================================================
-    reg prev_cmp_valid;
+    reg prev_cmp_any_valid;
     integer cc_line, cc_cyc;
+    wire cmp_any_valid = |cmp_valid_out;
+    integer cc_lane_i;
 
     always @(posedge clk_slow_div2) begin
         if (rst_n && dumper_en) begin
-            if (cmp_valid_out && !prev_cmp_valid) begin
+            if (cmp_any_valid && !prev_cmp_any_valid) begin
                 cc_line = cap_c_line_cnt;
                 cc_cyc  = 0;
                 cap_c_line_cnt = cap_c_line_cnt + 1;
+                // zero per-lane counts for this new line
+                for (cc_lane_i = 0; cc_lane_i < 16; cc_lane_i = cc_lane_i + 1)
+                    cap_c_lane_cnt[cc_line][cc_lane_i] = 0;
             end
-            if (cmp_valid_out) begin
+            if (cmp_any_valid) begin
                 // Group A (lanes 0..7)
                 cap_c_a[cc_line * MAX_LINE_LEN + cc_cyc][0] = cmp_a_top0;
                 cap_c_a[cc_line * MAX_LINE_LEN + cc_cyc][1] = cmp_a_top1;
@@ -380,11 +409,18 @@ module tb_loopback_desched_top;
                 cap_c_b[cc_line * MAX_LINE_LEN + cc_cyc][5] = cmp_b_bot1;
                 cap_c_b[cc_line * MAX_LINE_LEN + cc_cyc][6] = cmp_b_bot2;
                 cap_c_b[cc_line * MAX_LINE_LEN + cc_cyc][7] = cmp_b_bot3;
+                // Per-lane valid bits + counts
+                for (cc_lane_i = 0; cc_lane_i < 16; cc_lane_i = cc_lane_i + 1) begin
+                    cap_c_lv[cc_line * MAX_LINE_LEN + cc_cyc][cc_lane_i] = cmp_valid_out[cc_lane_i];
+                    if (cmp_valid_out[cc_lane_i])
+                        cap_c_lane_cnt[cc_line][cc_lane_i] =
+                            cap_c_lane_cnt[cc_line][cc_lane_i] + 1;
+                end
 
                 cap_c_line_len[cc_line] = cc_cyc + 1;
                 cc_cyc = cc_cyc + 1;
             end
-            prev_cmp_valid = cmp_valid_out;
+            prev_cmp_any_valid = cmp_any_valid;
         end
     end
 
@@ -395,6 +431,15 @@ module tb_loopback_desched_top;
     integer mismatch_cnt;
 
     initial fail_total = 0;
+
+    task set_lane_len_all;
+        input integer val;
+        integer li;
+        begin
+            for (li = 0; li < 16; li = li + 1)
+                lane_len_cfg[li] = val[12:0];
+        end
+    endtask
 
     task clear_inputs;
         begin
@@ -409,7 +454,7 @@ module tb_loopback_desched_top;
     task clear_arrays;
         integer idx, lane, ln;
         begin
-            for (idx = 0; idx < MAX_LINES * MAX_LINE_LEN; idx = idx + 1)
+            for (idx = 0; idx < MAX_LINES * MAX_LINE_LEN; idx = idx + 1) begin
                 for (lane = 0; lane < 8; lane = lane + 1) begin
                     golden_a[idx][lane] = 0;
                     golden_b[idx][lane] = 0;
@@ -420,12 +465,17 @@ module tb_loopback_desched_top;
                     gold_c_a[idx][lane] = 0;
                     gold_c_b[idx][lane] = 0;
                 end
+                for (lane = 0; lane < 16; lane = lane + 1)
+                    cap_c_lv[idx][lane] = 0;
+            end
             for (ln = 0; ln < MAX_LINES; ln = ln + 1) begin
                 golden_line_len[ln] = 0;
                 cap_a_line_len[ln]  = 0;
                 cap_b_line_len[ln]  = 0;
                 cap_c_line_len[ln]  = 0;
                 gold_c_line_len[ln] = 0;
+                for (lane = 0; lane < 16; lane = lane + 1)
+                    cap_c_lane_cnt[ln][lane] = 0;
             end
             golden_line_cnt = 0;
             cap_a_line_cnt  = 0;
@@ -439,10 +489,10 @@ module tb_loopback_desched_top;
             cb_cyc  = 0;
             cc_line = 0;
             cc_cyc  = 0;
-            prev_valid_in    = 0;
-            prev_rev_a_valid = 0;
-            prev_rev_b_valid = 0;
-            prev_cmp_valid   = 0;
+            prev_valid_in      = 0;
+            prev_rev_a_valid   = 0;
+            prev_rev_b_valid   = 0;
+            prev_cmp_any_valid = 0;
         end
     endtask
 
@@ -616,17 +666,26 @@ module tb_loopback_desched_top;
             end
 
             // =================================================================
-            // Compactor compare: compactor golden is cycles
-            //   { 0,1, 4,5, 8,9, 12,13, 16,17, 20,21 } of the scheduler input,
-            // i.e. drop every pair of cycles after every 2 kept cycles (4:2).
-            // Build gold_c_a / gold_c_b from golden_a / golden_b, then compare
-            // to cap_c_a / cap_c_b with offset detection (same as rev path).
+            // Compactor compare (per-lane valid, with length limiter):
+            //   - Build gold_c_a/b from input golden by picking cycles
+            //     {0,1, 4,5, 8,9, 12,13, 16,17, 20,21} (4:2 compaction).
+            //   - For each lane i in the active set (determined by mode):
+            //       expected_valid_count[i] = min(gold_c_line_len, lane_len_cfg[i])
+            //       cap_c_lane_cnt[line][i] must equal expected_valid_count[i].
+            //     For each slow cycle in the captured line:
+            //       expected cap_c_lv == 1 iff (cyc < expected_valid_count[i]).
+            //       when cap_c_lv==1 the data on that lane must equal
+            //       gold_c_{a|b}[cyc_within_keep][lane_in_group].
+            //   - Inactive lanes (per mode) are not checked.
             // =================================================================
             begin : COMPACTOR_CMP
                 integer cline, csrc, cdst;
                 integer cmp_mm;
                 integer cmp_g_base, cmp_c_base;
                 integer glen, keep;
+                integer lane16, grp_lane, exp_cnt, got_cnt, exp_lv, got_lv;
+                integer lane_active_max;
+                reg [DATA_W-1:0] exp_val, got_val;
 
                 cmp_mm = 0;
 
@@ -716,18 +775,40 @@ module tb_loopback_desched_top;
                 end
                 $display("");
 
-                // --- Compactor compare: strict, no offset, no skip ---
-                // Contract: cap_c_line_cnt == golden_line_cnt and for every
-                // line cap_c_line_len == gold_c_line_len, element-by-element
-                // equality across all 8 lanes (Group A always, Group B when
-                // mode[1]). Any length mismatch or value mismatch is FAIL.
-                $display("  Compactor: golden %0d lines, capture %0d lines",
-                    golden_line_cnt, cap_c_line_cnt);
+                // --- Determine active lane range from mode ---
+                // 4L -> 4, 8L -> 8, 12L -> 12, 16L -> 16.
+                case (mode)
+                    2'b00: lane_active_max = 4;
+                    2'b01: lane_active_max = 8;
+                    2'b10: lane_active_max = 12;
+                    2'b11: lane_active_max = 16;
+                    default: lane_active_max = 16;
+                endcase
+
+                $display("  Compactor: golden %0d lines, capture %0d lines (active lanes 0..%0d)",
+                    golden_line_cnt, cap_c_line_cnt, lane_active_max - 1);
 
                 if (cap_c_line_cnt !== golden_line_cnt) begin
                     $display("  FAIL: compactor line count mismatch (got=%0d exp=%0d)",
                         cap_c_line_cnt, golden_line_cnt);
                     cmp_mm = cmp_mm + 1;
+                end
+
+                // --- Per-lane valid bitmap dump (first line only, up to 6 cycles) ---
+                if (cap_c_line_cnt > 0) begin
+                    $display("  === PER-LANE valid_out bitmap (line 0, first up to 6 slow cycles) ===");
+                    for (csrc = 0; csrc < cap_c_line_len[0] && csrc < 6; csrc = csrc + 1) begin
+                        $display("    [cyc %0d] valid_out[15:0] = %b%b%b%b_%b%b%b%b_%b%b%b%b_%b%b%b%b",
+                            csrc,
+                            cap_c_lv[csrc][15], cap_c_lv[csrc][14],
+                            cap_c_lv[csrc][13], cap_c_lv[csrc][12],
+                            cap_c_lv[csrc][11], cap_c_lv[csrc][10],
+                            cap_c_lv[csrc][9],  cap_c_lv[csrc][8],
+                            cap_c_lv[csrc][7],  cap_c_lv[csrc][6],
+                            cap_c_lv[csrc][5],  cap_c_lv[csrc][4],
+                            cap_c_lv[csrc][3],  cap_c_lv[csrc][2],
+                            cap_c_lv[csrc][1],  cap_c_lv[csrc][0]);
+                    end
                 end
 
                 for (cline = 0; cline < golden_line_cnt; cline = cline + 1) begin
@@ -738,62 +819,63 @@ module tb_loopback_desched_top;
                         $display("  FAIL: compactor missing line %0d entirely", cline);
                         cmp_mm = cmp_mm + 1;
                     end else begin
-                        // Strict length check — no "cap shorter is fine".
-                        if (cap_c_line_len[cline] !== gold_c_line_len[cline]) begin
-                            $display("  FAIL: compactor line %0d length mismatch cap_len=%0d golden_len=%0d",
-                                cline, cap_c_line_len[cline], gold_c_line_len[cline]);
-                            cmp_mm = cmp_mm + 1;
-                        end
+                        for (lane16 = 0; lane16 < lane_active_max; lane16 = lane16 + 1) begin
+                            // Group / within-group lane index
+                            if (lane16 < 8) begin
+                                grp_lane = lane16;
+                            end else begin
+                                grp_lane = lane16 - 8;
+                            end
 
-                        // Compare every beat from index 0 against golden index 0.
-                        // Walk the full golden length; any missing capture beat
-                        // counts as a mismatch (don't silently stop at cap_len).
-                        for (csrc = 0; csrc < gold_c_line_len[cline]; csrc = csrc + 1) begin
-                            for (lane = 0; lane < 8; lane = lane + 1) begin
-                                if (csrc >= cap_c_line_len[cline]) begin
+                            // Expected beat count for this lane
+                            if (lane_len_cfg[lane16] >= gold_c_line_len[cline])
+                                exp_cnt = gold_c_line_len[cline];
+                            else
+                                exp_cnt = lane_len_cfg[lane16];
+
+                            got_cnt = cap_c_lane_cnt[cline][lane16];
+                            if (got_cnt !== exp_cnt) begin
+                                $display("  FAIL: line %0d lane %0d valid-count mismatch got=%0d exp=%0d (lane_len=%0d, golden_len=%0d)",
+                                    cline, lane16, got_cnt, exp_cnt,
+                                    lane_len_cfg[lane16], gold_c_line_len[cline]);
+                                cmp_mm = cmp_mm + 1;
+                            end
+
+                            // Walk every captured slow cycle; check valid bit
+                            // matches expected pattern (1 for first exp_cnt cycles,
+                            // 0 afterwards), and on valid=1 check the data bus.
+                            for (csrc = 0; csrc < cap_c_line_len[cline]; csrc = csrc + 1) begin
+                                exp_lv = (csrc < exp_cnt) ? 1 : 0;
+                                got_lv = cap_c_lv[cmp_c_base + csrc][lane16];
+
+                                if (got_lv !== exp_lv) begin
                                     if (cmp_mm < 20)
-                                        $display("  [CMP MISSING] A line%0d cyc%0d lane%0d exp=%02h (no capture beat)",
-                                            cline, csrc, lane,
-                                            gold_c_a[cmp_g_base + csrc][lane]);
-                                    cmp_mm = cmp_mm + 1;
-                                end else if (cap_c_a[cmp_c_base + csrc][lane] !==
-                                             gold_c_a[cmp_g_base + csrc][lane]) begin
-                                    if (cmp_mm < 20)
-                                        $display("  [CMP MISMATCH] A line%0d cyc%0d lane%0d got=%02h exp=%02h",
-                                            cline, csrc, lane,
-                                            cap_c_a[cmp_c_base + csrc][lane],
-                                            gold_c_a[cmp_g_base + csrc][lane]);
+                                        $display("  [CMP LV] line%0d cyc%0d lane%0d got_valid=%0d exp_valid=%0d",
+                                            cline, csrc, lane16, got_lv, exp_lv);
                                     cmp_mm = cmp_mm + 1;
                                 end
-                                if (mode[1]) begin
-                                    if (csrc >= cap_c_line_len[cline]) begin
-                                        // already counted above; avoid double-print
-                                    end else if (cap_c_b[cmp_c_base + csrc][lane] !==
-                                                 gold_c_b[cmp_g_base + csrc][lane]) begin
+
+                                if (got_lv && exp_lv && csrc < gold_c_line_len[cline]) begin
+                                    // Data compare
+                                    if (lane16 < 8) begin
+                                        got_val = cap_c_a[cmp_c_base + csrc][grp_lane];
+                                        exp_val = gold_c_a[cmp_g_base + csrc][grp_lane];
+                                    end else begin
+                                        got_val = cap_c_b[cmp_c_base + csrc][grp_lane];
+                                        exp_val = gold_c_b[cmp_g_base + csrc][grp_lane];
+                                    end
+                                    if (got_val !== exp_val) begin
                                         if (cmp_mm < 20)
-                                            $display("  [CMP MISMATCH] B line%0d cyc%0d lane%0d got=%02h exp=%02h",
-                                                cline, csrc, lane,
-                                                cap_c_b[cmp_c_base + csrc][lane],
-                                                gold_c_b[cmp_g_base + csrc][lane]);
+                                            $display("  [CMP DATA] line%0d cyc%0d lane%0d got=%02h exp=%02h",
+                                                cline, csrc, lane16, got_val, exp_val);
                                         cmp_mm = cmp_mm + 1;
                                     end
                                 end
                             end
                         end
 
-                        // Flag any extra trailing capture beats past golden.
-                        if (cap_c_line_len[cline] > gold_c_line_len[cline]) begin
-                            for (csrc = gold_c_line_len[cline];
-                                 csrc < cap_c_line_len[cline]; csrc = csrc + 1) begin
-                                if (cmp_mm < 20)
-                                    $display("  [CMP EXTRA] line%0d cyc%0d A_L0=%02h (past golden end)",
-                                        cline, csrc, cap_c_a[cmp_c_base + csrc][0]);
-                                cmp_mm = cmp_mm + 1;
-                            end
-                        end
-
-                        $display("  Compactor line %0d: golden_len=%0d cap_len=%0d (strict, offset=0)",
-                            cline, gold_c_line_len[cline], cap_c_line_len[cline]);
+                        $display("  Compactor line %0d: cap_len=%0d golden_keep_len=%0d",
+                            cline, cap_c_line_len[cline], gold_c_line_len[cline]);
                     end
                 end
 
@@ -825,6 +907,9 @@ module tb_loopback_desched_top;
             slow_half       = ratio * CLK_FAST_HALF;
             mismatch_cnt = 0;
             dumper_en    = 0;
+            // NOTE: lane_len_cfg is set by the caller before invoking run_mode
+            // (normal cases call set_lane_len_all(8191); length-limiter cases
+            // set individual per-lane limits).
 
             clear_inputs;
             clear_arrays;
@@ -942,21 +1027,65 @@ module tb_loopback_desched_top;
         slow_half = CLK_FAST_HALF;
         dumper_en = 0;
         clear_inputs;
+        set_lane_len_all(8191);
 
         //                  name             mode    ratio  vlane
+        set_lane_len_all(8191);
         run_mode("4L  PHY",   2'b00,  1, 0);
+        set_lane_len_all(8191);
         run_mode("8L  PHY",   2'b01,  2, 0);
+        set_lane_len_all(8191);
         run_mode("12L PHY",   2'b10,  3, 0);
+        set_lane_len_all(8191);
         run_mode("16L PHY",   2'b11,  4, 0);
 
+        set_lane_len_all(8191);
         run_mode("4L  VLANE", 2'b00,  1, 1);
+        set_lane_len_all(8191);
         run_mode("8L  VLANE", 2'b01,  2, 1);
+        set_lane_len_all(8191);
         run_mode("12L VLANE", 2'b10,  3, 1);
+        set_lane_len_all(8191);
         run_mode("16L VLANE", 2'b11,  4, 1);
+
+        // =====================================================================
+        // C9: 8L PHY uniform len=4
+        //   L0..L7  = 4      (expect 4 beats valid_out[i]=1 then zero)
+        //   L8..L15 = 8191   (inactive in 8L mode anyway, not checked)
+        // =====================================================================
+        set_lane_len_all(8191);
+        begin integer li;
+          for (li = 0; li < 8; li = li + 1) lane_len_cfg[li] = 13'd4;
+        end
+        run_mode("C9  8L PHY uniform len=4", 2'b01, 2, 0);
+
+        // =====================================================================
+        // C10: 16L PHY mixed length
+        //   L0=2, L1=4, L2=6, L3=8, L4=10, L5=12, L6=8191, L7=8191
+        //   L8=2, L9=4, L10=6, L11=8, L12=10, L13=12, L14=8191, L15=8191
+        // =====================================================================
+        set_lane_len_all(8191);
+        lane_len_cfg[0]  = 13'd2;  lane_len_cfg[1]  = 13'd4;
+        lane_len_cfg[2]  = 13'd6;  lane_len_cfg[3]  = 13'd8;
+        lane_len_cfg[4]  = 13'd10; lane_len_cfg[5]  = 13'd12;
+        lane_len_cfg[6]  = 13'd8191; lane_len_cfg[7]  = 13'd8191;
+        lane_len_cfg[8]  = 13'd2;  lane_len_cfg[9]  = 13'd4;
+        lane_len_cfg[10] = 13'd6;  lane_len_cfg[11] = 13'd8;
+        lane_len_cfg[12] = 13'd10; lane_len_cfg[13] = 13'd12;
+        lane_len_cfg[14] = 13'd8191; lane_len_cfg[15] = 13'd8191;
+        run_mode("C10 16L PHY mixed length", 2'b11, 4, 0);
+
+        // =====================================================================
+        // C11: 4L PHY L0=0
+        //   L0=0 (never emits), L1..L3=8191 (full 12 beats each)
+        // =====================================================================
+        set_lane_len_all(8191);
+        lane_len_cfg[0] = 13'd0;
+        run_mode("C11 4L PHY L0=0", 2'b00, 1, 0);
 
         $display("\n============================================");
         if (fail_total == 0)
-            $display("[PASS] ALL LOOPBACK DESCHED_TOP TESTS PASSED (8 modes, %0d input cycles each)", NUM_CYCLES);
+            $display("[PASS] ALL LOOPBACK DESCHED_TOP TESTS PASSED (8 regression + 3 length-limiter cases, %0d input cycles each)", NUM_CYCLES);
         else
             $display("[FAIL] %0d mode(s) failed", fail_total);
         $display("============================================");

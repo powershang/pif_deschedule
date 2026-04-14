@@ -37,8 +37,39 @@ clk_out_div2  -> compactor 輸出時脈 (clk_out_slow)
 | rst_n          | in  | 1       | Active-low async reset |
 | valid_in       | in  | 1       | Reverse-transpose 的 `valid_out`（clk_in_fast 域）|
 | a_top0..3_in, a_bot0..3_in, b_top0..3_in, b_bot0..3_in | in | DATA_W | 16 路 N-lane 輸入 (8 lane × 2 group) |
-| valid_out      | out | 1       | Compactor 輸出 valid (clk_out_slow 域) |
-| a_top0..3, a_bot0..3, b_top0..3, b_bot0..3 | out | DATA_W | 16 路 full output (clk_out_slow 域) |
+| lane_len_0 .. lane_len_15 | in  | 13      | Per-lane beat-count limit (見下方 Per-lane length limiter) |
+| valid_out      | out | **16**  | Per-lane compactor 輸出 valid (clk_out_slow 域)；bit i 對應第 i 條 lane |
+| a_top0..3, a_bot0..3, b_top0..3, b_bot0..3 | out | DATA_W | 16 路 full output (clk_out_slow 域)。對於超限 lane，bus 維持上一拍值，下游須以 `valid_out[i]` gate |
+
+## Per-lane length limiter
+
+每條 lane 都有一個獨立的 13-bit beat counter `lane_cnt[i]`，搭配對應的 `lane_len_<i>` 上限暫存器，限制該 lane 在「同一段 burst 內」最多可以送出多少 beat。超過後該 lane 的 `valid_out[i]` 拉低，data bus 不變但語意上 don't care。
+
+### Lane 編號 ↔ valid_out bit mapping
+
+| bit | lane     | bit | lane     |
+|-----|----------|-----|----------|
+| 0   | a_top0   | 8   | b_top0   |
+| 1   | a_top1   | 9   | b_top1   |
+| 2   | a_top2   | 10  | b_top2   |
+| 3   | a_top3   | 11  | b_top3   |
+| 4   | a_bot0   | 12  | b_bot0   |
+| 5   | a_bot1   | 13  | b_bot1   |
+| 6   | a_bot2   | 14  | b_bot2   |
+| 7   | a_bot3   | 15  | b_bot3   |
+
+### 行為（每個 `clk_out_slow` cycle，per lane i）
+
+- compactor 內部 valid (`valid_out_inner`) = 1 且 `lane_cnt[i] < lane_len_<i>`：`valid_out[i] = 1`，`lane_cnt[i] += 1`
+- compactor 內部 valid = 1 且 `lane_cnt[i] >= lane_len_<i>`：`valid_out[i] = 0`（超限，data bus don't care），counter hold
+- compactor 內部 valid = 0 (burst 結束)：`lane_cnt[i] <= 0`（下個 valid 段是新 burst，從零數）
+
+### 關鍵設計決策
+
+- **Burst 邊界使用 `valid_out_inner`**（slow 域），而非 fast 域 `valid_in`：counter 與 valid_out_r 同 clock domain，省掉 CDC，且 burst 結束邊界自然對齊到 slow tick。
+- **Data bus 行為**：超限 lane 不單獨 hold per-lane data，整條 16-lane data bus 在 idle 時就會 hold 在最後一筆 valid beat（既有行為），因此「超限 lane data」會 bleed 過去的舊值。下游必須只看 `valid_out[i]` 決定是否取資料。
+- **Counter 寬度**：13-bit 上限 = 8191 beats，遠超實際單一 burst 最大長度。
+- **Reset**：所有 `lane_cnt[i]` async reset 到 0；burst 結束 (`valid_out_inner == 0`) 也會 sync clear 到 0。
 
 ## Operation
 

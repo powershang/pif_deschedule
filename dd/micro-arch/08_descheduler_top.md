@@ -16,7 +16,8 @@ Top-level deserialization block. Two-stage descheduler + lane compactor + revers
 | virtual_lane_en | in | 1 | 0=MODE_PHY chunk format, 1=MODE_VLANE chunk format (matches forward scheduler `mode`). Fed as `mode` to both `u_rev_a` and `u_rev_b`. |
 | valid_in | in | 1 | Serialized input valid (clk_in domain) |
 | din0..din3 | in | DATA_W | 4-lane serialized input |
-| valid_out | out | 1 | Restored output valid (clk_out domain) |
+| lane_len_0 .. lane_len_15 | in | 13 | Per-lane beat-count limit, fed straight through to `u_compact`. See `06_lane_compactor.md` § "Per-lane length limiter" for lane↔bit mapping. |
+| valid_out | out | **16** | Per-lane restored output valid (clk_out_div2 domain). bit i ↔ lane i (mapping matches `lane_len_<i>`). |
 | a_top0..3, a_bot0..3 | out | DATA_W | Group A restored output (per-lane-per-cycle) |
 | b_top0..3, b_bot0..3 | out | DATA_W | Group B restored output (per-lane-per-cycle) |
 | dbg_state | out | 3 | Descheduler FSM state |

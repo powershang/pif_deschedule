@@ -55,6 +55,10 @@ module lane_compactor (
     a_bot0_in, a_bot1_in, a_bot2_in, a_bot3_in,
     b_top0_in, b_top1_in, b_top2_in, b_top3_in,
     b_bot0_in, b_bot1_in, b_bot2_in, b_bot3_in,
+    lane_len_0,  lane_len_1,  lane_len_2,  lane_len_3,
+    lane_len_4,  lane_len_5,  lane_len_6,  lane_len_7,
+    lane_len_8,  lane_len_9,  lane_len_10, lane_len_11,
+    lane_len_12, lane_len_13, lane_len_14, lane_len_15,
     valid_out,
     a_top0, a_top1, a_top2, a_top3,
     a_bot0, a_bot1, a_bot2, a_bot3,
@@ -63,6 +67,7 @@ module lane_compactor (
 );
     parameter DATA_W  = 32;
     parameter CNT_W   = 8;   // beat counter width (covers >> largest expected burst)
+    parameter LEN_W   = 13;  // per-lane length-limiter counter / register width
 
     // -------------------------------------------------------------------------
     // Ports
@@ -76,7 +81,17 @@ module lane_compactor (
     input  [DATA_W-1:0] b_top0_in, b_top1_in, b_top2_in, b_top3_in;
     input  [DATA_W-1:0] b_bot0_in, b_bot1_in, b_bot2_in, b_bot3_in;
 
-    output             valid_out;
+    // Per-lane length limiter inputs (13-bit each).  Lane <-> bit mapping:
+    //   bit 0 a_top0  bit 1 a_top1  bit 2 a_top2  bit 3 a_top3
+    //   bit 4 a_bot0  bit 5 a_bot1  bit 6 a_bot2  bit 7 a_bot3
+    //   bit 8 b_top0  bit 9 b_top1  bit10 b_top2  bit11 b_top3
+    //   bit12 b_bot0  bit13 b_bot1  bit14 b_bot2  bit15 b_bot3
+    input [LEN_W-1:0] lane_len_0,  lane_len_1,  lane_len_2,  lane_len_3;
+    input [LEN_W-1:0] lane_len_4,  lane_len_5,  lane_len_6,  lane_len_7;
+    input [LEN_W-1:0] lane_len_8,  lane_len_9,  lane_len_10, lane_len_11;
+    input [LEN_W-1:0] lane_len_12, lane_len_13, lane_len_14, lane_len_15;
+
+    output [15:0]      valid_out;
     output [DATA_W-1:0] a_top0, a_top1, a_top2, a_top3;
     output [DATA_W-1:0] a_bot0, a_bot1, a_bot2, a_bot3;
     output [DATA_W-1:0] b_top0, b_top1, b_top2, b_top3;
@@ -320,9 +335,93 @@ module lane_compactor (
     end
 
     // -------------------------------------------------------------------------
+    // Per-lane length limiter (clk_out_slow domain)
+    //
+    // Each lane has a free-running 13-bit beat counter.  The counter is
+    // incremented on every slow cycle that the inner compactor asserts a
+    // valid beat AND the lane has not yet hit its programmed length.
+    //
+    // Burst boundary:
+    //   "Burst" here means a contiguous run of compactor-valid cycles
+    //   (valid_out_inner == 1).  When valid_out_inner falls to 0 the burst
+    //   has ended and every lane counter is cleared, so the next
+    //   valid_out_inner=1 starts counting from zero again.  This matches the
+    //   spec: "valid_in=0 (burst end): lane_cnt[i] <= 0".  Using the
+    //   compactor's own slow-side valid (valid_out_inner) rather than the
+    //   fast-side valid_in keeps everything in one clock domain (no CDC).
+    //
+    // Per-lane gate:
+    //   valid_out[i] = valid_out_inner & (lane_cnt[i] < lane_len[i])
+    //
+    // Data bus:
+    //   The data outputs (a_top0..3, a_bot0..3, b_top0..3, b_bot0..3) are
+    //   bus-shared across all lanes and are driven by the existing output
+    //   MUX.  When a lane is gated off we hold the data unchanged; the
+    //   downstream consumer must use valid_out[i] to decide whether the
+    //   data on the corresponding lane bit is meaningful.  No extra
+    //   per-lane data hold is added: the compactor already holds the bus
+    //   at the last valid beat across idle gaps.
+    // -------------------------------------------------------------------------
+    wire valid_out_inner = valid_out_r;
+
+    reg [LEN_W-1:0] lane_cnt [0:15];
+    wire [LEN_W-1:0] lane_len [0:15];
+
+    assign lane_len[0]  = lane_len_0;
+    assign lane_len[1]  = lane_len_1;
+    assign lane_len[2]  = lane_len_2;
+    assign lane_len[3]  = lane_len_3;
+    assign lane_len[4]  = lane_len_4;
+    assign lane_len[5]  = lane_len_5;
+    assign lane_len[6]  = lane_len_6;
+    assign lane_len[7]  = lane_len_7;
+    assign lane_len[8]  = lane_len_8;
+    assign lane_len[9]  = lane_len_9;
+    assign lane_len[10] = lane_len_10;
+    assign lane_len[11] = lane_len_11;
+    assign lane_len[12] = lane_len_12;
+    assign lane_len[13] = lane_len_13;
+    assign lane_len[14] = lane_len_14;
+    assign lane_len[15] = lane_len_15;
+
+    wire [15:0] lane_active;
+    genvar gi;
+    generate
+        for (gi = 0; gi < 16; gi = gi + 1) begin : g_lane_active
+            assign lane_active[gi] = (lane_cnt[gi] < lane_len[gi]);
+        end
+    endgenerate
+
+    integer li;
+    always @(posedge clk_out_slow or negedge rst_n) begin
+        if (!rst_n) begin
+            for (li = 0; li < 16; li = li + 1) begin
+                lane_cnt[li] <= {LEN_W{1'b0}};
+            end
+        end else if (!valid_out_inner) begin
+            // Burst ended (or never started) -- clear all lane counters so
+            // the next contiguous valid run starts fresh.
+            for (li = 0; li < 16; li = li + 1) begin
+                lane_cnt[li] <= {LEN_W{1'b0}};
+            end
+        end else begin
+            // valid_out_inner == 1 : count one beat per lane that is still
+            // under its limit.  Lanes that have hit the limit hold value.
+            for (li = 0; li < 16; li = li + 1) begin
+                if (lane_cnt[li] < lane_len[li]) begin
+                    lane_cnt[li] <= lane_cnt[li] + {{(LEN_W-1){1'b0}}, 1'b1};
+                end else begin
+                    lane_cnt[li] <= lane_cnt[li];
+                end
+            end
+        end
+    end
+
+    // -------------------------------------------------------------------------
     // Outputs
     // -------------------------------------------------------------------------
-    assign valid_out = valid_out_r;
+    assign valid_out = {16{valid_out_inner}} & lane_active;
+
     assign a_top0 = out_a_top0; assign a_top1 = out_a_top1;
     assign a_top2 = out_a_top2; assign a_top3 = out_a_top3;
     assign a_bot0 = out_a_bot0; assign a_bot1 = out_a_bot1;
