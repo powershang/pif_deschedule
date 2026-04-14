@@ -49,7 +49,7 @@ module tb_loopback_compact;
     localparam CLK_FAST_HALF = 5;  // 10ns
 
     // Clocks
-    logic clk_fast, clk_slow;
+    logic clk_fast, clk_slow, clk_slow_div2;
 
     // Scheduler_top ports
     logic                  rst_n;
@@ -111,7 +111,7 @@ module tb_loopback_compact;
     );
 
     lane_compactor #(.DATA_W(DATA_W)) u_cmp (
-        .clk(clk_slow), .rst_n(rst_n),
+        .clk_in_fast(clk_slow), .clk_out_slow(clk_slow_div2), .rst_n(rst_n),
         .valid_in(rev_valid_out),
         .a_top0_in(rev_a_top0), .a_top1_in(rev_a_top1), .a_top2_in(rev_a_top2), .a_top3_in(rev_a_top3),
         .a_bot0_in(rev_a_bot0), .a_bot1_in(rev_a_bot1), .a_bot2_in(rev_a_bot2), .a_bot3_in(rev_a_bot3),
@@ -138,6 +138,13 @@ module tb_loopback_compact;
         clk_slow = 0;
         #(CLK_FAST_HALF);
         forever #(slow_half) clk_slow = ~clk_slow;
+    end
+
+    // clk_slow_div2 = clk_slow / 2 (compactor output clock, same-PLL)
+    initial begin
+        clk_slow_div2 = 0;
+        #(CLK_FAST_HALF);
+        forever #(2*slow_half) clk_slow_div2 = ~clk_slow_div2;
     end
 
     // VCD

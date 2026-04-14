@@ -10,7 +10,7 @@
 // =============================================================================
 
 module inplace_transpose_buf_multi_lane_descheduler_top (
-    clk_in, clk_out, rst_n, lane_mode, virtual_lane_en, valid_in,
+    clk_in, clk_out, clk_out_div2, rst_n, lane_mode, virtual_lane_en, valid_in,
     din0, din1, din2, din3,
     valid_out,
     a_top0, a_top1, a_top2, a_top3,
@@ -21,7 +21,7 @@ module inplace_transpose_buf_multi_lane_descheduler_top (
 );
     parameter DATA_W = 32;
 
-    input              clk_in, clk_out, rst_n;
+    input              clk_in, clk_out, clk_out_div2, rst_n;
     input  [1:0]       lane_mode;
     input              virtual_lane_en;   // 0 = MODE_PHY, 1 = MODE_VLANE
     input              valid_in;
@@ -144,8 +144,9 @@ module inplace_transpose_buf_multi_lane_descheduler_top (
     // Stage 3: Lane Compactor (unchanged)
     // =========================================================================
     lane_compactor #(.DATA_W(DATA_W)) u_compact (
-        .clk    (clk_out),
-        .rst_n  (rst_n),
+        .clk_in_fast  (clk_out),
+        .clk_out_slow (clk_out_div2),
+        .rst_n        (rst_n),
         .valid_in(rev_a_valid_out),
         .a_top0_in(cmp_a_top0), .a_top1_in(cmp_a_top1), .a_top2_in(cmp_a_top2), .a_top3_in(cmp_a_top3),
         .a_bot0_in(cmp_a_bot0), .a_bot1_in(cmp_a_bot1), .a_bot2_in(cmp_a_bot2), .a_bot3_in(cmp_a_bot3),

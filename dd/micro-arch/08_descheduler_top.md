@@ -9,7 +9,8 @@ Top-level deserialization block. Two-stage descheduler + lane compactor + revers
 | Port | Dir | Width | Description |
 |------|-----|-------|-------------|
 | clk_in | in | 1 | Fast clock (4-lane serialized input side) |
-| clk_out | in | 1 | Slow clock (N-lane restored output side) |
+| clk_out | in | 1 | Mid clock (N-lane restored output side, feeds descheduler + reverse-transpose + compactor input) |
+| clk_out_div2 | in | 1 | Slow clock (= `clk_out` / 2, same PLL). Drives the compactor output side; `valid_out` and the final per-lane-per-cycle data are on this domain. |
 | rst_n | in | 1 | Active-low async reset |
 | lane_mode | in | 2 | 00=4L, 01=8L, 10=12L, 11=16L |
 | virtual_lane_en | in | 1 | 0=MODE_PHY chunk format, 1=MODE_VLANE chunk format (matches forward scheduler `mode`). Fed as `mode` to both `u_rev_a` and `u_rev_b`. |
@@ -49,7 +50,7 @@ din[0:3] ──▶ [u_desched] ──▶ chunk ──▶ [u_rev_a / u_rev_b] ─
 
 2. **Stage 2 — Reverse Transpose** (`u_rev_a`, `u_rev_b`): Converts chunk format to per-lane-per-cycle format using 8x8 ping-pong buffers. Group A always active; Group B active only for 12L/16L modes. Fixed 9T latency.
 
-3. **Stage 3 — Lane Compactor** (`u_compact`): Merges 2 consecutive half-filled outputs into 1 full output. Output rate = reverse_transpose rate / 2.
+3. **Stage 3 — Lane Compactor** (`u_compact`): Dual-clock 4:2 compactor. Input side runs on `clk_out` (captures reverse-transpose output at `wr_phase==0/1`, drops `wr_phase==2/3`); output side runs on `clk_out_div2` with `rd_phase` toggling between `reg_a` and `reg_b`. Same-PLL fixed phase, no async CDC synchronisers. Output rate = reverse_transpose rate / 2 with continuous `valid_out` under continuous input burst. See `06_lane_compactor.md` for the full wr_phase / rd_phase scheme.
 
 ## Sub-modules
 
@@ -117,7 +118,7 @@ u_rev_a: dout[0] → a_top0    u_rev_b: dout[0] → b_top0
 ```
 Stage 1 (descheduler): N/4 clk_in cycles (collection) + 1 clk_out cycle (toggle detection)
 Stage 2 (reverse transpose): 9 clk_out cycles (INIT_FILL = 8 beats + 1 cycle NBA delay)
-Stage 3 (compactor): 2 clk_out cycles (accumulate even + output on odd)
+Stage 3 (compactor): 1 clk_out_div2 cycle of output flop delay after first pair captured on clk_out side
 ```
 
 Total initial latency before first output: Stage 1 + Stage 2 + Stage 3. After pipeline fill, output is continuous at the expected rate for each mode.
