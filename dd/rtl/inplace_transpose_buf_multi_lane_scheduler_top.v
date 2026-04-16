@@ -9,7 +9,7 @@
 // =============================================================================
 
 module inplace_transpose_buf_multi_lane_scheduler_top (
-    clk_in, clk_out, rst_n, valid_in, lane_mode, virtual_lane_en,
+    clk_in, clk_out, rst_n, valid_in, lane_mode, align_mode, virtual_lane_en,
     din0,  din1,  din2,  din3,
     din4,  din5,  din6,  din7,
     din8,  din9,  din10, din11,
@@ -26,6 +26,7 @@ module inplace_transpose_buf_multi_lane_scheduler_top (
     input              rst_n;
     input              valid_in;
     input  [1:0]       lane_mode;
+    input              align_mode;
     input              virtual_lane_en;
     input  [DATA_W-1:0] din0, din1, din2, din3;
     input  [DATA_W-1:0] din4, din5, din6, din7;
@@ -51,7 +52,7 @@ module inplace_transpose_buf_multi_lane_scheduler_top (
 
     lanedata_8n_align_process #(.DATA_W(DATA_W)) u_align (
         .clk(clk_in), .rst_n(rst_n),
-        .valid_in(valid_in), .virtual_lane_en(virtual_lane_en),
+        .valid_in(valid_in), .align_mode(align_mode), .virtual_lane_en(virtual_lane_en),
         .din0(din0), .din1(din1), .din2(din2), .din3(din3),
         .din4(din4), .din5(din5), .din6(din6), .din7(din7),
         .din8(din8), .din9(din9), .din10(din10), .din11(din11),

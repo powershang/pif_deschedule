@@ -75,6 +75,7 @@ module tb;
         .valid_in       (valid_in),
         .lane_mode      (lane_mode),
         .virtual_lane_en(virtual_lane_en),
+        .align_mode     (1'b1),
         .din0           (din0),
         .din1           (din1),
         .din2           (din2),

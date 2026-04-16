@@ -112,7 +112,7 @@ module tb_loopback_desched_top;
     // =========================================================================
     inplace_transpose_buf_multi_lane_scheduler_top #(.DATA_W(DATA_W)) u_sched_top (
         .clk_in(clk_slow), .clk_out(clk_fast), .rst_n(rst_n),
-        .valid_in(valid_in), .lane_mode(lane_mode), .virtual_lane_en(virtual_lane_en),
+        .valid_in(valid_in), .lane_mode(lane_mode), .virtual_lane_en(virtual_lane_en), .align_mode(1'b1),
         .din0(din0),   .din1(din1),   .din2(din2),   .din3(din3),
         .din4(din4),   .din5(din5),   .din6(din6),   .din7(din7),
         .din8(din8),   .din9(din9),   .din10(din10), .din11(din11),

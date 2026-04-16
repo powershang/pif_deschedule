@@ -87,6 +87,7 @@ module tb_loopback_compact;
         .valid_in(fwd_valid_in),
         .lane_mode(lane_mode),
         .virtual_lane_en(virtual_lane_en),
+        .align_mode(1'b1),
         .din0(fwd_din[0]),   .din1(fwd_din[1]),   .din2(fwd_din[2]),   .din3(fwd_din[3]),
         .din4(fwd_din[4]),   .din5(fwd_din[5]),   .din6(fwd_din[6]),   .din7(fwd_din[7]),
         .din8(fwd_din[8]),   .din9(fwd_din[9]),   .din10(fwd_din[10]), .din11(fwd_din[11]),
