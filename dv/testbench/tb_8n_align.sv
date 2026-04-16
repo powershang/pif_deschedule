@@ -160,52 +160,86 @@ module tb_8n_align;
     // =========================================================================
     // Returns expected data for output beat_idx, lane l, given burst parameters.
     // For "don't care" regions (odd rem padding), returns -1 to signal skip.
+    // =========================================================================
+    // Golden: compute expected output value for any beat index
+    //
+    // Chunk sizes in beats:
+    //   8N PHY:   8    8N VLANE: 4
+    //   4N PHY:   4    4N VLANE: 2
+    //
+    // PHY:   1 beat = 1 sample → Cn in beat0, Cn+1 in beat1 → replay alternates
+    // VLANE: 1 beat = 2 sample → Cn+Cn+1 both in beat0     → replay repeats beat0
+    //
+    // Returns -1 for don't-care (odd rem padding)
+    // =========================================================================
     function automatic integer golden_beat;
         input integer beat_idx;
         input integer l;
         input integer burst_len;
         input integer base_val;
-        input integer amode;  // 0=4N, 1=8N
-        integer rem8, rem4, chunk_start, pad_idx, src_beat;
-        integer pad_phase1, phase1_end;
+        input integer amode;   // 0=4N, 1=8N
+        input integer vl_en;   // 0=PHY, 1=VLANE
+        integer chunk_beats, rem, chunk_start, pad_idx, src_beat;
+        integer pad_phase1, phase1_end, phase2_beats;
         begin
             if (beat_idx < burst_len) begin
                 // Passthrough region
                 golden_beat = exp_din(beat_idx, l, base_val);
             end else if (amode == 1) begin
-                // 8N-mode padding
-                rem8 = burst_len % 8;
-                if (rem8 == 0) begin
+                // 8N-mode
+                chunk_beats = vl_en ? 4 : 8;
+                rem = burst_len % chunk_beats;
+                if (rem == 0) begin
                     golden_beat = -1; // should not reach here
-                end else if (rem8[0]) begin
-                    // Odd rem: don't care
-                    golden_beat = -1;
+                end else if (vl_en) begin
+                    // VLANE: odd rem means odd-beat burst (= odd sample count)
+                    if (rem[0]) begin
+                        golden_beat = -1; // don't care
+                    end else begin
+                        // Even rem: replay chunk's beat 0 (contains both Cn and Cn+1)
+                        chunk_start = burst_len - rem;
+                        golden_beat = exp_din(chunk_start, l, base_val);
+                    end
                 end else begin
-                    // Even rem: replay Cn, Cn+1 from chunk start
-                    chunk_start = burst_len - rem8;
-                    pad_idx = beat_idx - burst_len;
-                    src_beat = chunk_start + (pad_idx % 2);
-                    golden_beat = exp_din(src_beat, l, base_val);
+                    // PHY: odd rem
+                    if (rem[0]) begin
+                        golden_beat = -1;
+                    end else begin
+                        // Even rem: replay Cn (beat0), Cn+1 (beat1) alternating
+                        chunk_start = burst_len - rem;
+                        pad_idx = beat_idx - burst_len;
+                        src_beat = chunk_start + (pad_idx % 2);
+                        golden_beat = exp_din(src_beat, l, base_val);
+                    end
                 end
             end else begin
                 // 4N-mode
-                rem4 = burst_len % 4;
-                pad_phase1 = (rem4 == 0) ? 0 : (4 - rem4);
+                chunk_beats = vl_en ? 2 : 4;
+                rem = burst_len % chunk_beats;
+                pad_phase1 = (rem == 0) ? 0 : (chunk_beats - rem);
                 phase1_end = burst_len + pad_phase1;
+                // Phase2 zero beats: PHY=4, VLANE=2
+                phase2_beats = vl_en ? 2 : 4;
 
-                if (rem4[0]) begin
-                    // Odd rem4: phase1 is don't-care, phase2 is zero
+                if (rem != 0 && (vl_en ? rem[0] : rem[0])) begin
+                    // Odd rem: phase1 don't-care, phase2 zero
                     if (beat_idx < phase1_end) begin
-                        golden_beat = -1;  // don't care
+                        golden_beat = -1;
                     end else begin
-                        golden_beat = 0;   // phase2 all zero
+                        golden_beat = 0;
                     end
                 end else if (beat_idx < phase1_end) begin
-                    // Phase 1: replay Cn, Cn+1 from 4-beat chunk start
-                    chunk_start = burst_len - rem4;
+                    // Phase 1: replay
+                    chunk_start = burst_len - rem;
                     pad_idx = beat_idx - burst_len;
-                    src_beat = chunk_start + (pad_idx % 2);
-                    golden_beat = exp_din(src_beat, l, base_val);
+                    if (vl_en) begin
+                        // VLANE: repeat chunk's beat 0
+                        golden_beat = exp_din(chunk_start, l, base_val);
+                    end else begin
+                        // PHY: alternate Cn, Cn+1
+                        src_beat = chunk_start + (pad_idx % 2);
+                        golden_beat = exp_din(src_beat, l, base_val);
+                    end
                 end else begin
                     // Phase 2: all zero
                     golden_beat = 0;
@@ -220,16 +254,20 @@ module tb_8n_align;
     function automatic integer expected_out_len;
         input integer burst_len;
         input integer amode;
-        integer rem8, rem4, pad8, pad_phase1;
+        input integer vl_en;
+        integer chunk_beats, rem, pad, pad_phase1, phase2_beats;
         begin
             if (amode == 1) begin
-                rem8 = burst_len % 8;
-                pad8 = (rem8 == 0) ? 0 : (8 - rem8);
-                expected_out_len = burst_len + pad8;
+                chunk_beats = vl_en ? 4 : 8;
+                rem = burst_len % chunk_beats;
+                pad = (rem == 0) ? 0 : (chunk_beats - rem);
+                expected_out_len = burst_len + pad;
             end else begin
-                rem4 = burst_len % 4;
-                pad_phase1 = (rem4 == 0) ? 0 : (4 - rem4);
-                expected_out_len = burst_len + pad_phase1 + 4;  // phase1 + phase2(4 zero)
+                chunk_beats = vl_en ? 2 : 4;
+                rem = burst_len % chunk_beats;
+                pad_phase1 = (rem == 0) ? 0 : (chunk_beats - rem);
+                phase2_beats = vl_en ? 2 : 4;
+                expected_out_len = burst_len + pad_phase1 + phase2_beats;
             end
         end
     endfunction
@@ -267,14 +305,23 @@ module tb_8n_align;
             repeat(20) @(posedge clk);
             cap_started = 0;
 
-            exp_out_len = expected_out_len(burst_len, amode);
+            exp_out_len = expected_out_len(burst_len, amode, vlane_en);
 
             // Determine if this is an odd-rem (error) case
+            // Chunk sizes: 8N PHY=8, 8N VLANE=4, 4N PHY=4, 4N VLANE=2
             if (amode == 1) begin
-                rem_val = burst_len % 8;
+                if (vlane_en) begin
+                    rem_val = burst_len % 4;
+                end else begin
+                    rem_val = burst_len % 8;
+                end
                 is_odd_rem = rem_val[0];
             end else begin
-                rem4_val = burst_len % 4;
+                if (vlane_en) begin
+                    rem4_val = burst_len % 2;
+                end else begin
+                    rem4_val = burst_len % 4;
+                end
                 is_odd_rem = rem4_val[0];
             end
 
@@ -296,7 +343,7 @@ module tb_8n_align;
             // Check 3: data check (passthrough + padding) using golden function
             for (i = 0; i < cap_count; i++) begin
                 for (l = 0; l < 16; l++) begin
-                    golden_val = golden_beat(i, l, burst_len, base_val, amode);
+                    golden_val = golden_beat(i, l, burst_len, base_val, amode, vlane_en);
                     if (golden_val == -1) begin
                         // Don't care region, skip
                     end else begin
@@ -308,8 +355,12 @@ module tb_8n_align;
                                          i, l, cap[l][i], exp_val);
                             else if (amode == 0 && golden_val == 0) begin
                                 // Could be phase1-zero or phase2-zero; check which
-                                rem4_val = burst_len % 4;
-                                pad_phase1 = (rem4_val == 0) ? 0 : (4 - rem4_val);
+                                begin
+                                    integer chunk_b;
+                                    chunk_b = vlane_en ? 2 : 4;
+                                    rem4_val = burst_len % chunk_b;
+                                    pad_phase1 = (rem4_val == 0) ? 0 : (chunk_b - rem4_val);
+                                end
                                 phase1_end = burst_len + pad_phase1;
                                 if (i >= phase1_end)
                                     $display("  FAIL phase2-zero beat=%0d lane=%0d got=%02h exp=00",
@@ -328,26 +379,31 @@ module tb_8n_align;
 
             // Check 4: 4N-mode phase2 explicit all-zero check (even if golden already covers it)
             if (amode == 0) begin
-                rem4_val = burst_len % 4;
-                pad_phase1 = (rem4_val == 0) ? 0 : (4 - rem4_val);
-                phase1_end = burst_len + pad_phase1;
-                $display("  4N-mode: phase1_end=%0d phase2=[%0d..%0d]",
-                         phase1_end, phase1_end, exp_out_len - 1);
-                for (i = phase1_end; i < cap_count; i++) begin
-                    for (l = 0; l < 16; l++) begin
-                        if (cap[l][i] !== {DATA_W{1'b0}}) begin
-                            $display("  FAIL phase2-zero beat=%0d lane=%0d got=%02h (must be 0x00)",
-                                     i, l, cap[l][i]);
-                            local_fail++;
+                begin
+                    integer chunk_b4, exp_phase2;
+                    chunk_b4 = vlane_en ? 2 : 4;
+                    exp_phase2 = vlane_en ? 2 : 4;
+                    rem4_val = burst_len % chunk_b4;
+                    pad_phase1 = (rem4_val == 0) ? 0 : (chunk_b4 - rem4_val);
+                    phase1_end = burst_len + pad_phase1;
+                    $display("  4N-mode: phase1_end=%0d phase2=[%0d..%0d] (vlane=%0d)",
+                             phase1_end, phase1_end, exp_out_len - 1, vlane_en);
+                    for (i = phase1_end; i < cap_count; i++) begin
+                        for (l = 0; l < 16; l++) begin
+                            if (cap[l][i] !== {DATA_W{1'b0}}) begin
+                                $display("  FAIL phase2-zero beat=%0d lane=%0d got=%02h (must be 0x00)",
+                                         i, l, cap[l][i]);
+                                local_fail++;
+                            end
                         end
                     end
-                end
-                // Verify phase2 is exactly 4 beats
-                if (cap_count > phase1_end) begin
-                    if ((cap_count - phase1_end) !== 4) begin
-                        $display("  FAIL phase2 length=%0d expected=4",
-                                 cap_count - phase1_end);
-                        local_fail++;
+                    // Verify phase2 is exactly exp_phase2 beats
+                    if (cap_count > phase1_end) begin
+                        if ((cap_count - phase1_end) !== exp_phase2) begin
+                            $display("  FAIL phase2 length=%0d expected=%0d",
+                                     cap_count - phase1_end, exp_phase2);
+                            local_fail++;
+                        end
                     end
                 end
             end
@@ -366,8 +422,12 @@ module tb_8n_align;
                     if (b < burst_len)
                         tag = "burst";
                     else if (amode == 0) begin
-                        rem4_val = burst_len % 4;
-                        pad_phase1 = (rem4_val == 0) ? 0 : (4 - rem4_val);
+                        begin
+                            integer chunk_be;
+                            chunk_be = vlane_en ? 2 : 4;
+                            rem4_val = burst_len % chunk_be;
+                            pad_phase1 = (rem4_val == 0) ? 0 : (chunk_be - rem4_val);
+                        end
                         phase1_end = burst_len + pad_phase1;
                         if (b < phase1_end)
                             tag = "ph1  ";
@@ -463,11 +523,11 @@ module tb_8n_align;
 
             // Burst 1: 8N-mode, rem=0, len=8, base 0x20
             burst1_len = 8; burst1_base = 8'h20; burst1_mode = 1;
-            b1_exp_len = expected_out_len(burst1_len, burst1_mode);  // 8
+            b1_exp_len = expected_out_len(burst1_len, burst1_mode, 0);  // 8, PHY
 
             // Burst 2: 4N-mode, rem4=2, len=6, base 0xA0
             burst2_len = 6; burst2_base = 8'hA0; burst2_mode = 0;
-            b2_exp_len = expected_out_len(burst2_len, burst2_mode);  // 6+2+4=12
+            b2_exp_len = expected_out_len(burst2_len, burst2_mode, 0);  // 6+2+4=12, PHY
 
             exp_total = b1_exp_len + b2_exp_len;  // 8+12=20
 
@@ -497,7 +557,7 @@ module tb_8n_align;
             // Burst 1 data check (8N, rem=0, passthrough only)
             for (i = 0; i < burst1_len && i < cap_count; i++) begin
                 for (l = 0; l < 16; l++) begin
-                    golden_val = golden_beat(i, l, burst1_len, burst1_base, burst1_mode);
+                    golden_val = golden_beat(i, l, burst1_len, burst1_base, burst1_mode, 0);
                     if (golden_val != -1) begin
                         exp_val = golden_val[DATA_W-1:0];
                         if (cap[l][i] !== exp_val) begin
@@ -519,7 +579,7 @@ module tb_8n_align;
             // Burst 2 output lives at positions [b1_exp_len .. b1_exp_len + b2_exp_len - 1]
             for (i = 0; i < b2_exp_len && (b1_exp_len + i) < cap_count; i++) begin
                 for (l = 0; l < 16; l++) begin
-                    golden_val = golden_beat(i, l, burst2_len, burst2_base, burst2_mode);
+                    golden_val = golden_beat(i, l, burst2_len, burst2_base, burst2_mode, 0);
                     if (golden_val != -1) begin
                         exp_val = golden_val[DATA_W-1:0];
                         if (cap[l][b1_exp_len + i] !== exp_val) begin
@@ -630,7 +690,33 @@ module tb_8n_align;
             drive_burst(6, 8'hB0);    // len=6 => rem4=2, phase1=2pad, phase2=4zero
             repeat(20) @(posedge clk);
             cap_started = 0;
-            dump_padding_sequence("4N rem4=2 (len=6 base=0xB0)", 6, 8'hB0, 0);
+            dump_padding_sequence("4N PHY rem4=2 (len=6 base=0xB0)", 6, 8'hB0, 0);
+        end
+    endtask
+
+    task dump_8n_vlane_rem2;
+        begin
+            do_reset;
+            align_mode = 1;
+            virtual_lane_en = 1;
+            cap_started = 1;
+            drive_burst(10, 8'h28);   // len=10, VLANE chunk=4, 10%4=2, pad=2
+            repeat(20) @(posedge clk);
+            cap_started = 0;
+            dump_padding_sequence("8N VLANE rem=2 (len=10 base=0x28)", 10, 8'h28, 1);
+        end
+    endtask
+
+    task dump_4n_vlane_rem0;
+        begin
+            do_reset;
+            align_mode = 0;
+            virtual_lane_en = 1;
+            cap_started = 1;
+            drive_burst(8, 8'h98);    // len=8, VLANE chunk=2, 8%2=0, phase1=0, phase2=2zero
+            repeat(20) @(posedge clk);
+            cap_started = 0;
+            dump_padding_sequence("4N VLANE rem=0 (len=8 base=0x98)", 8, 8'h98, 0);
         end
     endtask
 
@@ -741,6 +827,8 @@ module tb_8n_align;
         // =====================================================================
         dump_8n_rem2();
         dump_4n_rem2();
+        dump_8n_vlane_rem2();
+        dump_4n_vlane_rem0();
 
         // Summary table
         $display("\n===================== 8N-ALIGN SUMMARY =====================");

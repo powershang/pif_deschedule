@@ -28,7 +28,7 @@ module tb_reverse_inplace_transpose;
 
     localparam DATA_W    = 32;
     localparam CLK_HALF  = 5;
-    localparam SIM_END   = 8000;
+    localparam SIM_END   = 16000;
 
     // ---------------------------------------------------------------
     // DUT signals
@@ -495,6 +495,300 @@ module tb_reverse_inplace_transpose;
 
         // Drop valid — triggers partial flush (zero-fill rows 3-7)
         drive_idle();
+
+        // =========================================================
+        // Test 6: VLANE LANE8 basic (mode=1, lane_cfg=0)
+        //   8 beats: v0,v1,v2,v3,v0,v1,v2,v3
+        //   After write, buffer = same as PHY, so output = T1
+        // =========================================================
+        repeat(20) @(posedge clk);
+        rst_n = 0;
+        valid_in = 0;
+        repeat(3) @(posedge clk);
+        rst_n = 1;
+        repeat(2) @(posedge clk);
+
+        test_num = 6;
+        $display("");
+        $display("============================================");
+        $display("[TEST 6] VLANE LANE8 basic");
+        $display("============================================");
+
+        mode     = 1;  // VLANE
+        lane_cfg = 0;  // LANE8
+
+        // beat0 (vlane0, half0): {L0@c0, L1@c0, L0@c1, L1@c1, L0@c2, L1@c2, L0@c3, L1@c3}
+        drive_chunk(32'd0,  32'd16, 32'd1,  32'd17,
+                    32'd2,  32'd18, 32'd3,  32'd19);
+        // beat1 (vlane1, half0): {L2@c0, L3@c0, L2@c1, L3@c1, L2@c2, L3@c2, L2@c3, L3@c3}
+        drive_chunk(32'd32, 32'd48, 32'd33, 32'd49,
+                    32'd34, 32'd50, 32'd35, 32'd51);
+        // beat2 (vlane2, half0): {L4@c0, L5@c0, L4@c1, L5@c1, L4@c2, L5@c2, L4@c3, L5@c3}
+        drive_chunk(32'd64, 32'd80, 32'd65, 32'd81,
+                    32'd66, 32'd82, 32'd67, 32'd83);
+        // beat3 (vlane3, half0): {L6@c0, L7@c0, L6@c1, L7@c1, L6@c2, L7@c2, L6@c3, L7@c3}
+        drive_chunk(32'd96, 32'd112,32'd97, 32'd113,
+                    32'd98, 32'd114,32'd99, 32'd115);
+        // beat4 (vlane0, half1): {L0@c4, L1@c4, L0@c5, L1@c5, L0@c6, L1@c6, L0@c7, L1@c7}
+        drive_chunk(32'd4,  32'd20, 32'd5,  32'd21,
+                    32'd6,  32'd22, 32'd7,  32'd23);
+        // beat5 (vlane1, half1): {L2@c4, L3@c4, L2@c5, L3@c5, L2@c6, L3@c6, L2@c7, L3@c7}
+        drive_chunk(32'd36, 32'd52, 32'd37, 32'd53,
+                    32'd38, 32'd54, 32'd39, 32'd55);
+        // beat6 (vlane2, half1): {L4@c4, L5@c4, L4@c5, L5@c5, L4@c6, L5@c6, L4@c7, L5@c7}
+        drive_chunk(32'd68, 32'd84, 32'd69, 32'd85,
+                    32'd70, 32'd86, 32'd71, 32'd87);
+        // beat7 (vlane3, half1): {L6@c4, L7@c4, L6@c5, L7@c5, L6@c6, L7@c6, L6@c7, L7@c7}
+        drive_chunk(32'd100,32'd116,32'd101,32'd117,
+                    32'd102,32'd118,32'd103,32'd119);
+
+        drive_idle();
+
+        // =========================================================
+        // Test 7: VLANE LANE4 basic (mode=1, lane_cfg=1)
+        //   8 beats (vl_beat 0..7), 2 active vlanes
+        //   Write mapping: base_row={vl_beat[1],1'b0}
+        //                  base_col={vl_beat[2],vl_beat[0],1'b0}
+        //   buf[base_row][base_col]=dt0, [+1][base_col]=dt1,
+        //       [base_row][base_col+1]=dt2, [+1][base_col+1]=dt3
+        //   Target: row=lane(0..3), col=sample(0..7), val=L*16+S
+        //   Rows 4-7 zero-filled
+        // =========================================================
+        repeat(20) @(posedge clk);
+        rst_n = 0;
+        valid_in = 0;
+        repeat(3) @(posedge clk);
+        rst_n = 1;
+        repeat(2) @(posedge clk);
+
+        test_num = 7;
+        $display("");
+        $display("============================================");
+        $display("[TEST 7] VLANE LANE4 basic");
+        $display("============================================");
+
+        mode     = 1;  // VLANE
+        lane_cfg = 1;  // LANE4
+
+        // beat0 (vl_beat=0): vlane=0,half=0 → rows0,1 cols0,1
+        //   dt0=buf[0][0]=0, dt1=buf[1][0]=16, dt2=buf[0][1]=1, dt3=buf[1][1]=17
+        drive_chunk(32'd0,  32'd16, 32'd1,  32'd17,
+                    32'd0,  32'd0,  32'd0,  32'd0);
+        // beat1 (vl_beat=1): vlane=1,half=0 → rows0,1 cols2,3
+        //   dt0=buf[0][2]=2, dt1=buf[1][2]=18, dt2=buf[0][3]=3, dt3=buf[1][3]=19
+        drive_chunk(32'd2,  32'd18, 32'd3,  32'd19,
+                    32'd0,  32'd0,  32'd0,  32'd0);
+        // beat2 (vl_beat=2): vlane=0,half=1 → rows2,3 cols0,1
+        //   dt0=buf[2][0]=32, dt1=buf[3][0]=48, dt2=buf[2][1]=33, dt3=buf[3][1]=49
+        drive_chunk(32'd32, 32'd48, 32'd33, 32'd49,
+                    32'd0,  32'd0,  32'd0,  32'd0);
+        // beat3 (vl_beat=3): vlane=1,half=1 → rows2,3 cols2,3
+        //   dt0=buf[2][2]=34, dt1=buf[3][2]=50, dt2=buf[2][3]=35, dt3=buf[3][3]=51
+        drive_chunk(32'd34, 32'd50, 32'd35, 32'd51,
+                    32'd0,  32'd0,  32'd0,  32'd0);
+        // beat4 (vl_beat=4): vlane=0,half=0,bit2=1 → rows0,1 cols4,5
+        //   dt0=buf[0][4]=4, dt1=buf[1][4]=20, dt2=buf[0][5]=5, dt3=buf[1][5]=21
+        drive_chunk(32'd4,  32'd20, 32'd5,  32'd21,
+                    32'd0,  32'd0,  32'd0,  32'd0);
+        // beat5 (vl_beat=5): vlane=1,half=0,bit2=1 → rows0,1 cols6,7
+        //   dt0=buf[0][6]=6, dt1=buf[1][6]=22, dt2=buf[0][7]=7, dt3=buf[1][7]=23
+        drive_chunk(32'd6,  32'd22, 32'd7,  32'd23,
+                    32'd0,  32'd0,  32'd0,  32'd0);
+        // beat6 (vl_beat=6): vlane=0,half=1,bit2=1 → rows2,3 cols4,5
+        //   dt0=buf[2][4]=36, dt1=buf[3][4]=52, dt2=buf[2][5]=37, dt3=buf[3][5]=53
+        drive_chunk(32'd36, 32'd52, 32'd37, 32'd53,
+                    32'd0,  32'd0,  32'd0,  32'd0);
+        // beat7 (vl_beat=7): vlane=1,half=1,bit2=1 → rows2,3 cols6,7
+        //   dt0=buf[2][6]=38, dt1=buf[3][6]=54, dt2=buf[2][7]=39, dt3=buf[3][7]=55
+        drive_chunk(32'd38, 32'd54, 32'd39, 32'd55,
+                    32'd0,  32'd0,  32'd0,  32'd0);
+
+        drive_idle();
+
+        // =========================================================
+        // Test 8: LANE4 PHY fresh_burst (mode=0, lane_cfg=1)
+        //   4 beat partial → gap → fresh burst 8 beat
+        // =========================================================
+        repeat(20) @(posedge clk);
+        rst_n = 0;
+        valid_in = 0;
+        repeat(3) @(posedge clk);
+        rst_n = 1;
+        repeat(2) @(posedge clk);
+
+        test_num = 8;
+        $display("");
+        $display("============================================");
+        $display("[TEST 8] LANE4 PHY fresh_burst");
+        $display("============================================");
+
+        mode     = 0;  // PHY
+        lane_cfg = 1;  // LANE4
+
+        // Partial fill: 4 beats (discarded in INIT_FILL)
+        drive_chunk(32'd900, 32'd901, 32'd902, 32'd903,
+                    32'd0,   32'd0,   32'd0,   32'd0);
+        drive_chunk(32'd916, 32'd917, 32'd918, 32'd919,
+                    32'd0,   32'd0,   32'd0,   32'd0);
+        drive_chunk(32'd932, 32'd933, 32'd934, 32'd935,
+                    32'd0,   32'd0,   32'd0,   32'd0);
+        drive_chunk(32'd948, 32'd949, 32'd950, 32'd951,
+                    32'd0,   32'd0,   32'd0,   32'd0);
+
+        // Gap
+        drive_idle();
+        repeat(5) @(posedge clk);
+
+        // Fresh burst: 8 beats (base=1000), LANE4 PHY = 2 beats per lane
+        // Lane 0 beat 0: top={1000,1001,1002,1003}
+        drive_chunk(32'd1000, 32'd1001, 32'd1002, 32'd1003,
+                    32'd0,    32'd0,    32'd0,    32'd0);
+        // Lane 0 beat 1: top={1004,1005,1006,1007}
+        drive_chunk(32'd1004, 32'd1005, 32'd1006, 32'd1007,
+                    32'd0,    32'd0,    32'd0,    32'd0);
+        // Lane 1
+        drive_chunk(32'd1016, 32'd1017, 32'd1018, 32'd1019,
+                    32'd0,    32'd0,    32'd0,    32'd0);
+        drive_chunk(32'd1020, 32'd1021, 32'd1022, 32'd1023,
+                    32'd0,    32'd0,    32'd0,    32'd0);
+        // Lane 2
+        drive_chunk(32'd1032, 32'd1033, 32'd1034, 32'd1035,
+                    32'd0,    32'd0,    32'd0,    32'd0);
+        drive_chunk(32'd1036, 32'd1037, 32'd1038, 32'd1039,
+                    32'd0,    32'd0,    32'd0,    32'd0);
+        // Lane 3
+        drive_chunk(32'd1048, 32'd1049, 32'd1050, 32'd1051,
+                    32'd0,    32'd0,    32'd0,    32'd0);
+        drive_chunk(32'd1052, 32'd1053, 32'd1054, 32'd1055,
+                    32'd0,    32'd0,    32'd0,    32'd0);
+
+        drive_idle();
+
+        // =========================================================
+        // Test 9: VLANE LANE8 fresh_burst (mode=1, lane_cfg=0)
+        //   4 beat partial → gap → fresh burst 8 beat
+        // =========================================================
+        repeat(20) @(posedge clk);
+        rst_n = 0;
+        valid_in = 0;
+        repeat(3) @(posedge clk);
+        rst_n = 1;
+        repeat(2) @(posedge clk);
+
+        test_num = 9;
+        $display("");
+        $display("============================================");
+        $display("[TEST 9] VLANE LANE8 fresh_burst");
+        $display("============================================");
+
+        mode     = 1;  // VLANE
+        lane_cfg = 0;  // LANE8
+
+        // Partial fill: 4 beats (vlane 0..3, half0 only) — discarded
+        drive_chunk(32'd1100, 32'd1101, 32'd1102, 32'd1103,
+                    32'd1104, 32'd1105, 32'd1106, 32'd1107);
+        drive_chunk(32'd1108, 32'd1109, 32'd1110, 32'd1111,
+                    32'd1112, 32'd1113, 32'd1114, 32'd1115);
+        drive_chunk(32'd1116, 32'd1117, 32'd1118, 32'd1119,
+                    32'd1120, 32'd1121, 32'd1122, 32'd1123);
+        drive_chunk(32'd1124, 32'd1125, 32'd1126, 32'd1127,
+                    32'd1128, 32'd1129, 32'd1130, 32'd1131);
+
+        // Gap
+        drive_idle();
+        repeat(5) @(posedge clk);
+
+        // Fresh burst: 8 beats VLANE LANE8 (base=1200, L*16+S)
+        // Same pattern as T6 but with base offset 1200
+        // beat0 (vlane0, half0)
+        drive_chunk(32'd1200, 32'd1216, 32'd1201, 32'd1217,
+                    32'd1202, 32'd1218, 32'd1203, 32'd1219);
+        // beat1 (vlane1, half0)
+        drive_chunk(32'd1232, 32'd1248, 32'd1233, 32'd1249,
+                    32'd1234, 32'd1250, 32'd1235, 32'd1251);
+        // beat2 (vlane2, half0)
+        drive_chunk(32'd1264, 32'd1280, 32'd1265, 32'd1281,
+                    32'd1266, 32'd1282, 32'd1267, 32'd1283);
+        // beat3 (vlane3, half0)
+        drive_chunk(32'd1296, 32'd1312, 32'd1297, 32'd1313,
+                    32'd1298, 32'd1314, 32'd1299, 32'd1315);
+        // beat4 (vlane0, half1)
+        drive_chunk(32'd1204, 32'd1220, 32'd1205, 32'd1221,
+                    32'd1206, 32'd1222, 32'd1207, 32'd1223);
+        // beat5 (vlane1, half1)
+        drive_chunk(32'd1236, 32'd1252, 32'd1237, 32'd1253,
+                    32'd1238, 32'd1254, 32'd1239, 32'd1255);
+        // beat6 (vlane2, half1)
+        drive_chunk(32'd1268, 32'd1284, 32'd1269, 32'd1285,
+                    32'd1270, 32'd1286, 32'd1271, 32'd1287);
+        // beat7 (vlane3, half1)
+        drive_chunk(32'd1300, 32'd1316, 32'd1301, 32'd1317,
+                    32'd1302, 32'd1318, 32'd1303, 32'd1319);
+
+        drive_idle();
+
+        // =========================================================
+        // Test 10: VLANE LANE4 fresh_burst (mode=1, lane_cfg=1)
+        //   4 beat partial → gap → fresh burst 8 beat
+        // =========================================================
+        repeat(20) @(posedge clk);
+        rst_n = 0;
+        valid_in = 0;
+        repeat(3) @(posedge clk);
+        rst_n = 1;
+        repeat(2) @(posedge clk);
+
+        test_num = 10;
+        $display("");
+        $display("============================================");
+        $display("[TEST 10] VLANE LANE4 fresh_burst");
+        $display("============================================");
+
+        mode     = 1;  // VLANE
+        lane_cfg = 1;  // LANE4
+
+        // Partial fill: 4 beats — discarded
+        drive_chunk(32'd1400, 32'd1401, 32'd1402, 32'd1403,
+                    32'd0,    32'd0,    32'd0,    32'd0);
+        drive_chunk(32'd1404, 32'd1405, 32'd1406, 32'd1407,
+                    32'd0,    32'd0,    32'd0,    32'd0);
+        drive_chunk(32'd1408, 32'd1409, 32'd1410, 32'd1411,
+                    32'd0,    32'd0,    32'd0,    32'd0);
+        drive_chunk(32'd1412, 32'd1413, 32'd1414, 32'd1415,
+                    32'd0,    32'd0,    32'd0,    32'd0);
+
+        // Gap
+        drive_idle();
+        repeat(5) @(posedge clk);
+
+        // Fresh burst: 8 beats VLANE LANE4 (base=1500, L*16+S)
+        // Same mapping as T7 but base=1500
+        // beat0: vlane=0,half=0 → rows0,1 cols0,1
+        drive_chunk(32'd1500, 32'd1516, 32'd1501, 32'd1517,
+                    32'd0,    32'd0,    32'd0,    32'd0);
+        // beat1: vlane=1,half=0 → rows0,1 cols2,3
+        drive_chunk(32'd1502, 32'd1518, 32'd1503, 32'd1519,
+                    32'd0,    32'd0,    32'd0,    32'd0);
+        // beat2: vlane=0,half=1 → rows2,3 cols0,1
+        drive_chunk(32'd1532, 32'd1548, 32'd1533, 32'd1549,
+                    32'd0,    32'd0,    32'd0,    32'd0);
+        // beat3: vlane=1,half=1 → rows2,3 cols2,3
+        drive_chunk(32'd1534, 32'd1550, 32'd1535, 32'd1551,
+                    32'd0,    32'd0,    32'd0,    32'd0);
+        // beat4: vlane=0,half=0,bit2=1 → rows0,1 cols4,5
+        drive_chunk(32'd1504, 32'd1520, 32'd1505, 32'd1521,
+                    32'd0,    32'd0,    32'd0,    32'd0);
+        // beat5: vlane=1,half=0,bit2=1 → rows0,1 cols6,7
+        drive_chunk(32'd1506, 32'd1522, 32'd1507, 32'd1523,
+                    32'd0,    32'd0,    32'd0,    32'd0);
+        // beat6: vlane=0,half=1,bit2=1 → rows2,3 cols4,5
+        drive_chunk(32'd1536, 32'd1552, 32'd1537, 32'd1553,
+                    32'd0,    32'd0,    32'd0,    32'd0);
+        // beat7: vlane=1,half=1,bit2=1 → rows2,3 cols6,7
+        drive_chunk(32'd1538, 32'd1554, 32'd1539, 32'd1555,
+                    32'd0,    32'd0,    32'd0,    32'd0);
+
+        drive_idle();
     end
 
     // ---------------------------------------------------------------
@@ -505,6 +799,7 @@ module tb_reverse_inplace_transpose;
     integer t1_check_start, t2_check_start, t3_check_start, t4_check_start;
 
     initial begin
+        integer ii;
         out_cycle_cnt = 0;
         t1_mismatch_start = 0;
         t2_mismatch_start = 0;
@@ -514,6 +809,10 @@ module tb_reverse_inplace_transpose;
         t2_check_start = 0;
         t3_check_start = 0;
         t4_check_start = 0;
+        for (ii = 1; ii <= 10; ii = ii + 1) begin
+            t_pass[ii] = 0;
+            t_mm[ii]   = 0;
+        end
 
         // Wait for reset
         @(posedge rst_n);
@@ -528,8 +827,9 @@ module tb_reverse_inplace_transpose;
 
         check_transposed_block(32'd0, 8, "T1");
 
-        $display("[TEST 1] checks=%0d mismatches=%0d",
-            check_cnt - t1_check_start, mismatch_cnt - t1_mismatch_start);
+        t_pass[1] = check_cnt - t1_check_start;
+        t_mm[1]   = mismatch_cnt - t1_mismatch_start;
+        $display("[TEST 1] checks=%0d mismatches=%0d", t_pass[1], t_mm[1]);
 
         // =============================================
         // Test 2 output check: LANE4 mode
@@ -545,8 +845,9 @@ module tb_reverse_inplace_transpose;
 
         check_transposed_block(32'd0, 4, "T2");
 
-        $display("[TEST 2] checks=%0d mismatches=%0d",
-            check_cnt - t2_check_start, mismatch_cnt - t2_mismatch_start);
+        t_pass[2] = check_cnt - t2_check_start;
+        t_mm[2]   = mismatch_cnt - t2_mismatch_start;
+        $display("[TEST 2] checks=%0d mismatches=%0d", t_pass[2], t_mm[2]);
 
         // =============================================
         // Test 3 output check: Continuous streaming (two sets)
@@ -563,8 +864,9 @@ module tb_reverse_inplace_transpose;
         // Second set (no gap expected from ping-pong)
         check_transposed_block(32'd128, 8, "T3-set2");
 
-        $display("[TEST 3] checks=%0d mismatches=%0d",
-            check_cnt - t3_check_start, mismatch_cnt - t3_mismatch_start);
+        t_pass[3] = check_cnt - t3_check_start;
+        t_mm[3]   = mismatch_cnt - t3_mismatch_start;
+        $display("[TEST 3] checks=%0d mismatches=%0d", t_pass[3], t_mm[3]);
 
         // =============================================
         // Test 4 output check: Fresh burst reset
@@ -580,8 +882,9 @@ module tb_reverse_inplace_transpose;
         // Check the fresh burst output (base=300, 8 lanes)
         check_transposed_block(32'd300, 8, "T4");
 
-        $display("[TEST 4] checks=%0d mismatches=%0d",
-            check_cnt - t4_check_start, mismatch_cnt - t4_mismatch_start);
+        t_pass[4] = check_cnt - t4_check_start;
+        t_mm[4]   = mismatch_cnt - t4_mismatch_start;
+        $display("[TEST 4] checks=%0d mismatches=%0d", t_pass[4], t_mm[4]);
 
         // =============================================
         // Test 5 output check: Partial flush from STREAM
@@ -644,26 +947,149 @@ module tb_reverse_inplace_transpose;
                 end
             end
 
-            $display("[TEST 5] checks=%0d mismatches=%0d",
-                check_cnt - t5_check_start, mismatch_cnt - t5_mismatch_start);
+            t_pass[5] = check_cnt - t5_check_start;
+            t_mm[5]   = mismatch_cnt - t5_mismatch_start;
+            $display("[TEST 5] checks=%0d mismatches=%0d", t_pass[5], t_mm[5]);
+        end
+
+        // =============================================
+        // Test 6 output check: VLANE LANE8 basic
+        // Buffer = same as PHY after VLANE write, so output = T1
+        // Expected: cycle S => dout_L = L*16 + S (all 8 lanes)
+        // =============================================
+        wait(test_num == 6);
+        repeat(2) @(posedge clk);
+
+        begin
+            integer t6_check_start, t6_mismatch_start;
+            t6_check_start    = check_cnt;
+            t6_mismatch_start = mismatch_cnt;
+
+            check_transposed_block(32'd0, 8, "T6");
+
+            t_pass[6] = check_cnt - t6_check_start;
+            t_mm[6]   = mismatch_cnt - t6_mismatch_start;
+            $display("[TEST 6] checks=%0d mismatches=%0d", t_pass[6], t_mm[6]);
+        end
+
+        // =============================================
+        // Test 7 output check: VLANE LANE4 basic
+        // Expected: cycle S => dout_L = L*16 + S (L<4), dout_L=0 (L>=4)
+        // Same output pattern as T2
+        // =============================================
+        wait(test_num == 7);
+        repeat(2) @(posedge clk);
+
+        begin
+            integer t7_check_start, t7_mismatch_start;
+            t7_check_start    = check_cnt;
+            t7_mismatch_start = mismatch_cnt;
+
+            check_transposed_block(32'd0, 4, "T7");
+
+            t_pass[7] = check_cnt - t7_check_start;
+            t_mm[7]   = mismatch_cnt - t7_mismatch_start;
+            $display("[TEST 7] checks=%0d mismatches=%0d", t_pass[7], t_mm[7]);
+        end
+
+        // =============================================
+        // Test 8 output check: LANE4 PHY fresh_burst
+        // Partial discarded, only fresh burst (base=1000) produces output
+        // Expected: cycle S => dout_L = 1000 + L*16 + S (L<4), 0 (L>=4)
+        // =============================================
+        wait(test_num == 8);
+        repeat(2) @(posedge clk);
+
+        begin
+            integer t8_check_start, t8_mismatch_start;
+            t8_check_start    = check_cnt;
+            t8_mismatch_start = mismatch_cnt;
+
+            check_transposed_block(32'd1000, 4, "T8");
+
+            t_pass[8] = check_cnt - t8_check_start;
+            t_mm[8]   = mismatch_cnt - t8_mismatch_start;
+            $display("[TEST 8] checks=%0d mismatches=%0d", t_pass[8], t_mm[8]);
+        end
+
+        // =============================================
+        // Test 9 output check: VLANE LANE8 fresh_burst
+        // Partial discarded, only fresh burst (base=1200) produces output
+        // Expected: cycle S => dout_L = 1200 + L*16 + S (all 8 lanes)
+        // =============================================
+        wait(test_num == 9);
+        repeat(2) @(posedge clk);
+
+        begin
+            integer t9_check_start, t9_mismatch_start;
+            t9_check_start    = check_cnt;
+            t9_mismatch_start = mismatch_cnt;
+
+            check_transposed_block(32'd1200, 8, "T9");
+
+            t_pass[9] = check_cnt - t9_check_start;
+            t_mm[9]   = mismatch_cnt - t9_mismatch_start;
+            $display("[TEST 9] checks=%0d mismatches=%0d", t_pass[9], t_mm[9]);
+        end
+
+        // =============================================
+        // Test 10 output check: VLANE LANE4 fresh_burst
+        // Partial discarded, only fresh burst (base=1500) produces output
+        // Expected: cycle S => dout_L = 1500 + L*16 + S (L<4), 0 (L>=4)
+        // =============================================
+        wait(test_num == 10);
+        repeat(2) @(posedge clk);
+
+        begin
+            integer t10_check_start, t10_mismatch_start;
+            t10_check_start    = check_cnt;
+            t10_mismatch_start = mismatch_cnt;
+
+            check_transposed_block(32'd1500, 4, "T10");
+
+            t_pass[10] = check_cnt - t10_check_start;
+            t_mm[10]   = mismatch_cnt - t10_mismatch_start;
+            $display("[TEST 10] checks=%0d mismatches=%0d", t_pass[10], t_mm[10]);
         end
     end
+
+    // ---------------------------------------------------------------
+    // Per-test PASS/FAIL tracker
+    // ---------------------------------------------------------------
+    integer t_pass [1:10];
+    integer t_mm   [1:10];
 
     // ---------------------------------------------------------------
     // Timeout and summary
     // ---------------------------------------------------------------
     initial begin
+        integer ti;
+        integer total_pass;
         #(SIM_END);
         $display("");
         $display("============================================");
         $display("[SUMMARY]");
         $display("  Total check cycles : %0d", check_cnt);
         $display("  Total mismatches   : %0d", mismatch_cnt);
+        $display("--------------------------------------------");
+        total_pass = 0;
+        for (ti = 1; ti <= 10; ti = ti + 1) begin
+            if (t_mm[ti] == 0 && t_pass[ti] > 0)  begin
+                $display("  T%0d: PASS (%0d checks)", ti, t_pass[ti]);
+                total_pass = total_pass + 1;
+            end else if (t_pass[ti] == 0) begin
+                $display("  T%0d: NOT RUN", ti);
+            end else begin
+                $display("  T%0d: FAIL (%0d mismatches / %0d checks)", ti, t_mm[ti], t_pass[ti]);
+            end
+        end
+        $display("--------------------------------------------");
+        $display("  %0d / 10 tests PASSED", total_pass);
         $display("============================================");
-        if (mismatch_cnt == 0 && check_cnt >= 48)
+        if (mismatch_cnt == 0 && check_cnt >= 88)
             $display("[PASS] reverse_inplace_transpose all tests passed (%0d checks)", check_cnt);
-        else if (check_cnt < 48)
-            $display("[WARN] Only %0d / 48 expected checks completed", check_cnt);
+        else if (check_cnt < 88)
+            $display("[WARN] Only %0d / 88 expected checks completed", check_cnt);
         else
             $display("[FAIL] reverse_inplace_transpose tests FAILED (%0d mismatches)", mismatch_cnt);
         $display("============================================");

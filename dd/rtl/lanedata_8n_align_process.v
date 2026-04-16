@@ -56,9 +56,7 @@ module lanedata_8n_align_process (
     output [DATA_W-1:0] dout12, dout13, dout14, dout15;
     output reg          error_flag;
 
-    // Suppress unused-signal lint
-    wire _unused_virtual_lane_en;
-    assign _unused_virtual_lane_en = virtual_lane_en;
+    // virtual_lane_en is now used: VLANE halves chunk size (1 beat = 2 samples).
 
     // ---------------------------------------------------------------------
     // Input / output vector buses
@@ -86,6 +84,12 @@ module lanedata_8n_align_process (
     reg [2:0] pad_total;
     reg [1:0] rem4;
     reg [2:0] pad_phase1;
+
+    // Chunk size in beats depends on mode:
+    //   8N PHY:   8 beat    8N VLANE:  4 beat
+    //   4N PHY:   4 beat    4N VLANE:  2 beat
+    // VLANE halves chunk size because 1 beat = 2 samples.
+    wire vlane = virtual_lane_en;
 
     integer lane_idx;
 
@@ -159,23 +163,59 @@ module lanedata_8n_align_process (
                         dout_vec[lane_idx] <= din_vec[lane_idx];
                     end
 
-                    // tail_buf write: at each chunk's beat 0 and beat 1
-                    // 8N-mode chunk=8: beat_mod_q==0 => Cn, ==1 => Cn+1
-                    // 4N-mode chunk=4: beat_mod_q[1:0]==0 => Cn, ==1 => Cn+1
-                    //   (so beat 0,4 write tail_buf[0]; beat 1,5 write tail_buf[1])
-                    if (align_mode ? (beat_mod_q == 3'd0) : (beat_mod_q[1:0] == 2'd0)) begin
-                        for (lane_idx = 0; lane_idx < 16; lane_idx = lane_idx + 1) begin
-                            tail_buf[0][lane_idx] <= din_vec[lane_idx];
-                        end
-                    end else if (align_mode ? (beat_mod_q == 3'd1) : (beat_mod_q[1:0] == 2'd1)) begin
-                        for (lane_idx = 0; lane_idx < 16; lane_idx = lane_idx + 1) begin
-                            tail_buf[1][lane_idx] <= din_vec[lane_idx];
+                    // tail_buf write: at each chunk's beat 0 (and beat 1 for PHY).
+                    //
+                    // Chunk sizes in beats:
+                    //   8N PHY:  8 beat → write buf[0] at mod8==0, buf[1] at mod8==1
+                    //   8N VLANE:4 beat → write buf[0] at mod4==0 only (1 beat has Cn+Cn+1)
+                    //   4N PHY:  4 beat → write buf[0] at mod4==0, buf[1] at mod4==1
+                    //   4N VLANE:2 beat → write buf[0] at mod2==0 only
+                    //
+                    // is_chunk_beat0: this beat is the first beat of a new chunk
+                    // is_chunk_beat1: PHY only, second beat of chunk (for tail_buf[1])
+                    if (vlane) begin
+                        // VLANE: 1 beat = 2 samples (Cn in din0, Cn+1 in din1)
+                        // Only write tail_buf[0] at chunk start; no tail_buf[1] needed
+                        if (align_mode ? (beat_mod_q[1:0] == 2'd0) : (beat_mod_q[0] == 1'b0)) begin
+                            for (lane_idx = 0; lane_idx < 16; lane_idx = lane_idx + 1) begin
+                                tail_buf[0][lane_idx] <= din_vec[lane_idx];
+                            end
+                        end else begin
+                            // No tail_buf update
                         end
                     end else begin
-                        // No tail_buf update for remaining beats in chunk
+                        // PHY: 1 beat = 1 sample, need 2 beats for Cn + Cn+1
+                        if (align_mode ? (beat_mod_q == 3'd0) : (beat_mod_q[1:0] == 2'd0)) begin
+                            for (lane_idx = 0; lane_idx < 16; lane_idx = lane_idx + 1) begin
+                                tail_buf[0][lane_idx] <= din_vec[lane_idx];
+                            end
+                        end else if (align_mode ? (beat_mod_q == 3'd1) : (beat_mod_q[1:0] == 2'd1)) begin
+                            for (lane_idx = 0; lane_idx < 16; lane_idx = lane_idx + 1) begin
+                                tail_buf[1][lane_idx] <= din_vec[lane_idx];
+                            end
+                        end else begin
+                            // No tail_buf update for remaining beats in chunk
+                        end
                     end
 
-                    beat_mod_q   <= (beat_mod_q == 3'd7) ? 3'd0 : (beat_mod_q + 3'd1);
+                    // beat_mod_q wraps at chunk boundary (in beats):
+                    //   8N PHY:   8 beat (wrap at 7)
+                    //   8N VLANE: 4 beat (wrap at 3)
+                    //   4N PHY:   4 beat (wrap at 3)
+                    //   4N VLANE: 2 beat (wrap at 1)
+                    if (align_mode && !vlane) begin
+                        // 8N PHY: mod 8
+                        beat_mod_q <= (beat_mod_q == 3'd7) ? 3'd0 : (beat_mod_q + 3'd1);
+                    end else if (align_mode && vlane) begin
+                        // 8N VLANE: mod 4
+                        beat_mod_q <= (beat_mod_q == 3'd3) ? 3'd0 : (beat_mod_q + 3'd1);
+                    end else if (!align_mode && !vlane) begin
+                        // 4N PHY: mod 4
+                        beat_mod_q <= (beat_mod_q == 3'd3) ? 3'd0 : (beat_mod_q + 3'd1);
+                    end else begin
+                        // 4N VLANE: mod 2
+                        beat_mod_q <= (beat_mod_q == 3'd1) ? 3'd0 : (beat_mod_q + 3'd1);
+                    end
                     pad_active_q <= 1'b0;
                     pad_left_q   <= 3'd0;
                 end
@@ -187,8 +227,9 @@ module lanedata_8n_align_process (
                     dout_vec[lane_idx] <= tail_buf[replay_idx_q][lane_idx];
                 end
 
-                // Toggle between tail_buf[0] and tail_buf[1]
-                replay_idx_q <= ~replay_idx_q;
+                // PHY: toggle between tail_buf[0] and tail_buf[1] (Cn, Cn+1 alternating)
+                // VLANE: stay on tail_buf[0] (one beat carries both Cn and Cn+1)
+                replay_idx_q <= vlane ? 1'b0 : ~replay_idx_q;
 
                 if (pad_left_q == 3'd1) begin
                     pad_active_q <= 1'b0;
@@ -196,7 +237,7 @@ module lanedata_8n_align_process (
                     // In 4N-mode, transition to phase2 (zero fill)
                     if (!align_mode) begin
                         phase2_active_q <= 1'b1;
-                        phase2_left_q   <= 3'd4;
+                        phase2_left_q   <= vlane ? 3'd2 : 3'd4;
                     end else begin
                         beat_mod_q <= 3'd0;
                     end
@@ -221,38 +262,56 @@ module lanedata_8n_align_process (
 
             end else if (prev_valid_q && !valid_in) begin
                 // ----------------- Burst just ended -----------------
-                rem_now   = beat_mod_q;  // 0..7
+                // beat_mod_q already wraps at chunk boundary, so rem_now
+                // directly gives beats remaining in current chunk.
+                rem_now = beat_mod_q;
 
                 if (align_mode) begin
-                    // ===== 8N-mode =====
+                    // ===== 8N-mode (PHY chunk=8 beat, VLANE chunk=4 beat) =====
+                    // Compute pad_total from rem_now. Chunk sizes differ but
+                    // beat_mod_q wraps correctly for each.
                     pad_total = 3'd0;
-                    case (rem_now)
-                        3'd0: pad_total = 3'd0;
-                        3'd1: begin pad_total = 3'd7; error_flag_q <= 1'b1; error_flag <= 1'b1; end
-                        3'd2: pad_total = 3'd6;
-                        3'd3: begin pad_total = 3'd5; error_flag_q <= 1'b1; error_flag <= 1'b1; end
-                        3'd4: pad_total = 3'd4;
-                        3'd5: begin pad_total = 3'd3; error_flag_q <= 1'b1; error_flag <= 1'b1; end
-                        3'd6: pad_total = 3'd2;
-                        3'd7: begin pad_total = 3'd1; error_flag_q <= 1'b1; error_flag <= 1'b1; end
-                        default: pad_total = 3'd0;
-                    endcase
+                    if (vlane) begin
+                        // 8N VLANE: chunk = 4 beat
+                        case (rem_now)
+                            3'd0: pad_total = 3'd0;
+                            3'd1: begin pad_total = 3'd3; error_flag_q <= 1'b1; error_flag <= 1'b1; end
+                            3'd2: pad_total = 3'd2;
+                            3'd3: begin pad_total = 3'd1; error_flag_q <= 1'b1; error_flag <= 1'b1; end
+                            default: pad_total = 3'd0;
+                        endcase
+                    end else begin
+                        // 8N PHY: chunk = 8 beat
+                        case (rem_now)
+                            3'd0: pad_total = 3'd0;
+                            3'd1: begin pad_total = 3'd7; error_flag_q <= 1'b1; error_flag <= 1'b1; end
+                            3'd2: pad_total = 3'd6;
+                            3'd3: begin pad_total = 3'd5; error_flag_q <= 1'b1; error_flag <= 1'b1; end
+                            3'd4: pad_total = 3'd4;
+                            3'd5: begin pad_total = 3'd3; error_flag_q <= 1'b1; error_flag <= 1'b1; end
+                            3'd6: pad_total = 3'd2;
+                            3'd7: begin pad_total = 3'd1; error_flag_q <= 1'b1; error_flag <= 1'b1; end
+                            default: pad_total = 3'd0;
+                        endcase
+                    end
 
                     if (pad_total != 3'd0) begin
-                        // Emit first pad beat: tail_buf[0] (Cn), next will be tail_buf[1]
+                        // Emit first pad beat from tail_buf[0] (Cn)
                         valid_out    <= 1'b1;
                         pad_left_q   <= pad_total - 3'd1;
                         pad_active_q <= (pad_total > 3'd1);
-                        replay_idx_q <= 1'b1; // next beat from tail_buf[1]
+                        // PHY: next beat from tail_buf[1] (Cn+1), toggle thereafter
+                        // VLANE: stay on tail_buf[0] (one beat has both Cn and Cn+1)
+                        replay_idx_q <= vlane ? 1'b0 : 1'b1;
 
                         for (lane_idx = 0; lane_idx < 16; lane_idx = lane_idx + 1) begin
-                            dout_vec[lane_idx] <= tail_buf[0][lane_idx]; // Cn
+                            dout_vec[lane_idx] <= tail_buf[0][lane_idx];
                         end
 
                         if (pad_total == 3'd1) begin
                             beat_mod_q <= 3'd0;
                         end else begin
-                            // pad_active_q will handle the rest
+                            // pad_active_q handles the rest
                         end
                     end else begin
                         // rem == 0: perfectly aligned
@@ -261,41 +320,54 @@ module lanedata_8n_align_process (
                     end
 
                 end else begin
-                    // ===== 4N-mode =====
-                    rem4      = rem_now[1:0]; // mod 4
+                    // ===== 4N-mode (PHY chunk=4 beat, VLANE chunk=2 beat) =====
+                    // beat_mod_q wraps at chunk boundary, rem_now is direct.
                     pad_phase1 = 3'd0;
-                    case (rem4)
-                        2'd0: pad_phase1 = 3'd0;
-                        2'd1: begin pad_phase1 = 3'd3; error_flag_q <= 1'b1; error_flag <= 1'b1; end
-                        2'd2: pad_phase1 = 3'd2;
-                        2'd3: begin pad_phase1 = 3'd1; error_flag_q <= 1'b1; error_flag <= 1'b1; end
-                        default: pad_phase1 = 3'd0;
-                    endcase
+                    if (vlane) begin
+                        // 4N VLANE: chunk = 2 beat
+                        case (rem_now)
+                            3'd0: pad_phase1 = 3'd0;
+                            3'd1: begin pad_phase1 = 3'd1; error_flag_q <= 1'b1; error_flag <= 1'b1; end
+                            default: pad_phase1 = 3'd0;
+                        endcase
+                    end else begin
+                        // 4N PHY: chunk = 4 beat
+                        case (rem_now)
+                            3'd0: pad_phase1 = 3'd0;
+                            3'd1: begin pad_phase1 = 3'd3; error_flag_q <= 1'b1; error_flag <= 1'b1; end
+                            3'd2: pad_phase1 = 3'd2;
+                            3'd3: begin pad_phase1 = 3'd1; error_flag_q <= 1'b1; error_flag <= 1'b1; end
+                            default: pad_phase1 = 3'd0;
+                        endcase
+                    end
 
                     if (pad_phase1 != 3'd0) begin
-                        // Emit first phase1 pad beat: tail_buf[0] (Cn)
+                        // Emit first phase1 pad beat from tail_buf[0] (Cn)
                         valid_out    <= 1'b1;
                         pad_left_q   <= pad_phase1 - 3'd1;
                         pad_active_q <= (pad_phase1 > 3'd1);
-                        replay_idx_q <= 1'b1; // next from tail_buf[1]
+                        replay_idx_q <= vlane ? 1'b0 : 1'b1;
 
                         for (lane_idx = 0; lane_idx < 16; lane_idx = lane_idx + 1) begin
-                            dout_vec[lane_idx] <= tail_buf[0][lane_idx]; // Cn
+                            dout_vec[lane_idx] <= tail_buf[0][lane_idx];
                         end
 
                         if (pad_phase1 == 3'd1) begin
                             // Phase1 done in this single beat, go to phase2
                             pad_active_q    <= 1'b0;
                             phase2_active_q <= 1'b1;
-                            phase2_left_q   <= 3'd4;
+                            // Phase2 = fill rest of 8-beat output:
+                            // 4N PHY:  4 zero beats
+                            // 4N VLANE: 2 zero beats (4N chunk=2 beat → 8N=4 beat → need 2 more)
+                            phase2_left_q   <= vlane ? 3'd2 : 3'd4;
                         end else begin
                             // pad_active_q handles rest of phase1, then transitions to phase2
                         end
                     end else begin
-                        // rem4 == 0: phase1 needs no replay, go directly to phase2
-                        // Emit first zero beat now, 3 remaining
+                        // rem == 0: phase1 needs no replay, go directly to phase2
+                        // Phase2 zero beats: PHY=4, VLANE=2
                         phase2_active_q <= 1'b1;
-                        phase2_left_q   <= 3'd3;
+                        phase2_left_q   <= vlane ? 3'd1 : 3'd3;
                         valid_out <= 1'b1;
                         for (lane_idx = 0; lane_idx < 16; lane_idx = lane_idx + 1) begin
                             dout_vec[lane_idx] <= {DATA_W{1'b0}};
