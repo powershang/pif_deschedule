@@ -16,7 +16,8 @@
 //   Test 1: LANE8 basic (8 chunks, verify transposed output)
 //   Test 2: LANE4 mode (4 lanes x 2 beats, verify transposed output)
 //   Test 3: Continuous streaming ping-pong (16 chunks back-to-back)
-//   Test 4: Fresh burst reset (partial fill then new data)
+//   Test 4: Fresh burst reset (partial INIT_FILL discarded, fresh burst ok)
+//   Test 5: Partial flush from STREAM (3 chunks, zero-fill remainder)
 //
 // VCD: wave_reverse_inplace_transpose.vcd
 // =============================================================================
@@ -27,13 +28,14 @@ module tb_reverse_inplace_transpose;
 
     localparam DATA_W    = 32;
     localparam CLK_HALF  = 5;
-    localparam SIM_END   = 5000;
+    localparam SIM_END   = 8000;
 
     // ---------------------------------------------------------------
     // DUT signals
     // ---------------------------------------------------------------
     logic                  clk, rst_n;
     logic                  lane_cfg;
+    logic                  mode;
     logic                  valid_in;
     logic [DATA_W-1:0]     din_top0, din_top1, din_top2, din_top3;
     logic [DATA_W-1:0]     din_bot0, din_bot1, din_bot2, din_bot3;
@@ -48,6 +50,7 @@ module tb_reverse_inplace_transpose;
         .clk       (clk),
         .rst_n     (rst_n),
         .lane_cfg  (lane_cfg),
+        .mode      (mode),
         .valid_in  (valid_in),
         .din_top0  (din_top0),
         .din_top1  (din_top1),
@@ -145,7 +148,7 @@ module tb_reverse_inplace_transpose;
         input [DATA_W-1:0] t0, t1, t2, t3,
         input [DATA_W-1:0] b0, b1, b2, b3
     );
-        @(posedge clk);
+        @(negedge clk);   // setup before next posedge
         valid_in  = 1;
         din_top0  = t0; din_top1 = t1; din_top2 = t2; din_top3 = t3;
         din_bot0  = b0; din_bot1 = b1; din_bot2 = b2; din_bot3 = b3;
@@ -155,7 +158,7 @@ module tb_reverse_inplace_transpose;
     // Helper task: deassert valid_in
     // ---------------------------------------------------------------
     task drive_idle();
-        @(posedge clk);
+        @(negedge clk);   // setup before next posedge
         valid_in  = 0;
         din_top0  = 0; din_top1 = 0; din_top2 = 0; din_top3 = 0;
         din_bot0  = 0; din_bot1 = 0; din_bot2 = 0; din_bot3 = 0;
@@ -211,6 +214,7 @@ module tb_reverse_inplace_transpose;
         // Reset
         rst_n    = 0;
         lane_cfg = 0;  // LANE8
+        mode     = 0;  // MODE_PHY
         valid_in = 0;
         din_top0 = 0; din_top1 = 0; din_top2 = 0; din_top3 = 0;
         din_bot0 = 0; din_bot1 = 0; din_bot2 = 0; din_bot3 = 0;
@@ -262,8 +266,13 @@ module tb_reverse_inplace_transpose;
         // =========================================================
         // Test 2: LANE4 mode (2-beat per lane)
         // =========================================================
-        // Wait for test 1 output to flush
+        // Wait for test 1 output to flush, then reset before mode change
         repeat(20) @(posedge clk);
+        rst_n = 0;
+        valid_in = 0;
+        repeat(3) @(posedge clk);
+        rst_n = 1;
+        repeat(2) @(posedge clk);
 
         test_num = 2;
         $display("");
@@ -370,64 +379,121 @@ module tb_reverse_inplace_transpose;
         drive_idle();
 
         // =========================================================
-        // Test 4: Fresh burst reset
+        // Test 4: Fresh burst reset (partial INIT_FILL discarded)
+        //   Per spec, partial fill in INIT_FILL state produces no
+        //   output (silently discarded). The subsequent fresh burst
+        //   should work normally.
         // =========================================================
         repeat(30) @(posedge clk);
 
         test_num = 4;
         $display("");
         $display("============================================");
-        $display("[TEST 4] Fresh burst reset");
+        $display("[TEST 4] Fresh burst reset (partial discard)");
         $display("============================================");
 
         lane_cfg = 0;  // LANE8
 
-        // Feed 4 chunks (partial fill)
-        // Chunk 0 (Lane 0): values 200+
+        // Feed 4 chunks (partial fill, enters INIT_FILL via fresh_burst)
+        // These will be discarded — no output expected.
         drive_chunk(32'd200, 32'd201, 32'd202, 32'd203,
                     32'd204, 32'd205, 32'd206, 32'd207);
-        // Chunk 1 (Lane 1)
         drive_chunk(32'd216, 32'd217, 32'd218, 32'd219,
                     32'd220, 32'd221, 32'd222, 32'd223);
-        // Chunk 2 (Lane 2)
         drive_chunk(32'd232, 32'd233, 32'd234, 32'd235,
                     32'd236, 32'd237, 32'd238, 32'd239);
-        // Chunk 3 (Lane 3)
         drive_chunk(32'd248, 32'd249, 32'd250, 32'd251,
                     32'd252, 32'd253, 32'd254, 32'd255);
 
-        // Deassert valid_in for several cycles (gap)
+        // Gap (valid drops in INIT_FILL — no partial flush)
         drive_idle();
         repeat(5) @(posedge clk);
 
-        // Reassert with completely new data (fresh burst)
-        // New set: Lane L, sample S = L*16 + S + 300 (base=300)
-        // Chunk 0 (Lane 0)
+        // Fresh burst: 8 full chunks (base=300)
+        // This re-enters INIT_FILL, fills buf, transitions to STREAM, outputs.
         drive_chunk(32'd300, 32'd301, 32'd302, 32'd303,
                     32'd304, 32'd305, 32'd306, 32'd307);
-        // Chunk 1 (Lane 1)
         drive_chunk(32'd316, 32'd317, 32'd318, 32'd319,
                     32'd320, 32'd321, 32'd322, 32'd323);
-        // Chunk 2 (Lane 2)
         drive_chunk(32'd332, 32'd333, 32'd334, 32'd335,
                     32'd336, 32'd337, 32'd338, 32'd339);
-        // Chunk 3 (Lane 3)
         drive_chunk(32'd348, 32'd349, 32'd350, 32'd351,
                     32'd352, 32'd353, 32'd354, 32'd355);
-        // Chunk 4 (Lane 4)
         drive_chunk(32'd364, 32'd365, 32'd366, 32'd367,
                     32'd368, 32'd369, 32'd370, 32'd371);
-        // Chunk 5 (Lane 5)
         drive_chunk(32'd380, 32'd381, 32'd382, 32'd383,
                     32'd384, 32'd385, 32'd386, 32'd387);
-        // Chunk 6 (Lane 6)
         drive_chunk(32'd396, 32'd397, 32'd398, 32'd399,
                     32'd400, 32'd401, 32'd402, 32'd403);
-        // Chunk 7 (Lane 7)
         drive_chunk(32'd412, 32'd413, 32'd414, 32'd415,
                     32'd416, 32'd417, 32'd418, 32'd419);
 
         // Deassert valid_in
+        drive_idle();
+
+        // =========================================================
+        // Test 5: Partial flush from STREAM state
+        //   Feed two consecutive 8-chunk sets (no gap), then 3
+        //   partial chunks, then drop valid. The first set enters
+        //   STREAM; the second set reads set-1 while writing set-2.
+        //   The 3 partial chunks immediately follow, then valid
+        //   drops triggering partial flush.
+        // =========================================================
+        repeat(20) @(posedge clk);
+
+        test_num = 5;
+        $display("");
+        $display("============================================");
+        $display("[TEST 5] Partial flush from STREAM");
+        $display("============================================");
+
+        lane_cfg = 0;  // LANE8
+
+        // Set 1: Full 8-chunk set to enter STREAM (base=600)
+        drive_chunk(32'd600, 32'd601, 32'd602, 32'd603,
+                    32'd604, 32'd605, 32'd606, 32'd607);
+        drive_chunk(32'd616, 32'd617, 32'd618, 32'd619,
+                    32'd620, 32'd621, 32'd622, 32'd623);
+        drive_chunk(32'd632, 32'd633, 32'd634, 32'd635,
+                    32'd636, 32'd637, 32'd638, 32'd639);
+        drive_chunk(32'd648, 32'd649, 32'd650, 32'd651,
+                    32'd652, 32'd653, 32'd654, 32'd655);
+        drive_chunk(32'd664, 32'd665, 32'd666, 32'd667,
+                    32'd668, 32'd669, 32'd670, 32'd671);
+        drive_chunk(32'd680, 32'd681, 32'd682, 32'd683,
+                    32'd684, 32'd685, 32'd686, 32'd687);
+        drive_chunk(32'd696, 32'd697, 32'd698, 32'd699,
+                    32'd700, 32'd701, 32'd702, 32'd703);
+        drive_chunk(32'd712, 32'd713, 32'd714, 32'd715,
+                    32'd716, 32'd717, 32'd718, 32'd719);
+
+        // Set 2: Full 8-chunk set (base=800) — continuous, no gap
+        drive_chunk(32'd800, 32'd801, 32'd802, 32'd803,
+                    32'd804, 32'd805, 32'd806, 32'd807);
+        drive_chunk(32'd816, 32'd817, 32'd818, 32'd819,
+                    32'd820, 32'd821, 32'd822, 32'd823);
+        drive_chunk(32'd832, 32'd833, 32'd834, 32'd835,
+                    32'd836, 32'd837, 32'd838, 32'd839);
+        drive_chunk(32'd848, 32'd849, 32'd850, 32'd851,
+                    32'd852, 32'd853, 32'd854, 32'd855);
+        drive_chunk(32'd864, 32'd865, 32'd866, 32'd867,
+                    32'd868, 32'd869, 32'd870, 32'd871);
+        drive_chunk(32'd880, 32'd881, 32'd882, 32'd883,
+                    32'd884, 32'd885, 32'd886, 32'd887);
+        drive_chunk(32'd896, 32'd897, 32'd898, 32'd899,
+                    32'd900, 32'd901, 32'd902, 32'd903);
+        drive_chunk(32'd912, 32'd913, 32'd914, 32'd915,
+                    32'd916, 32'd917, 32'd918, 32'd919);
+
+        // Partial: 3 chunks (base=500) — continuous, no gap
+        drive_chunk(32'd500, 32'd501, 32'd502, 32'd503,
+                    32'd504, 32'd505, 32'd506, 32'd507);
+        drive_chunk(32'd516, 32'd517, 32'd518, 32'd519,
+                    32'd520, 32'd521, 32'd522, 32'd523);
+        drive_chunk(32'd532, 32'd533, 32'd534, 32'd535,
+                    32'd536, 32'd537, 32'd538, 32'd539);
+
+        // Drop valid — triggers partial flush (zero-fill rows 3-7)
         drive_idle();
     end
 
@@ -502,25 +568,85 @@ module tb_reverse_inplace_transpose;
 
         // =============================================
         // Test 4 output check: Fresh burst reset
-        // The partial fill (4 chunks) triggers a partial flush when valid
-        // drops — this produces 8 output cycles (partial data, expected).
-        // Then the fresh burst (base=300) produces 8 more output cycles.
-        // We skip the partial flush output, then check the fresh burst.
+        // Partial fill in INIT_FILL produces no output (discarded).
+        // Only the fresh burst (base=300) produces output.
         // =============================================
         wait(test_num == 4);
         repeat(2) @(posedge clk);
 
-        // Skip partial flush output (8 cycles from the 4-chunk partial fill)
-        check_transposed_block(32'd200, 4, "T4-partial");
-
         t4_check_start    = check_cnt;
         t4_mismatch_start = mismatch_cnt;
 
-        // Check the fresh burst output (base=300)
+        // Check the fresh burst output (base=300, 8 lanes)
         check_transposed_block(32'd300, 8, "T4");
 
         $display("[TEST 4] checks=%0d mismatches=%0d",
             check_cnt - t4_check_start, mismatch_cnt - t4_mismatch_start);
+
+        // =============================================
+        // Test 5 output check: Partial flush from STREAM
+        //
+        // DUT output sequence:
+        //   (1) Set-1 output (base=600): 8 cycles — may be interrupted
+        //       by set-2 rd_start (which coincides with end of set-1 write)
+        //   (2) Set-2 output (base=800): starts when set-2 buffer is full.
+        //       This read may be interrupted after ~3 cycles by the
+        //       partial flush rd_start.
+        //   (3) Partial flush output: base=500 rows 0-2, rows 3-7 zero.
+        //       This is the final output and completes fully.
+        //
+        // We skip set-1 and set-2 intermediate output (they may be
+        // truncated by rd_start preemption) and only verify the
+        // partial flush, which is the last complete read.
+        // =============================================
+        wait(test_num == 5);
+        repeat(2) @(posedge clk);
+
+        begin
+            integer t5_check_start, t5_mismatch_start;
+            integer skip_cnt;
+            t5_check_start    = check_cnt;
+            t5_mismatch_start = mismatch_cnt;
+
+            // Skip valid_out cycles until we see partial flush data.
+            // Partial flush data starts with dout0 = 500.
+            skip_cnt = 0;
+            while (!valid_out || dout0 != 32'd500) begin
+                if (valid_out) skip_cnt = skip_cnt + 1;
+                @(posedge clk);
+            end
+            $display("[T5] skipped %0d intermediate output cycles", skip_cnt);
+
+            // Now check partial flush output: 8 cycles
+            begin
+                integer s5;
+                logic [DATA_W-1:0] e0, e1, e2, e3, e4, e5, e6, e7;
+                for (s5 = 0; s5 < 8; s5 = s5 + 1) begin
+                    if (s5 > 0) begin
+                        while (!valid_out) @(posedge clk);
+                    end
+
+                    e0 = 32'd500 + s5;       // Lane 0
+                    e1 = 32'd516 + s5;       // Lane 1
+                    e2 = 32'd532 + s5;       // Lane 2
+                    e3 = 0;                  // Lane 3 (zero-filled)
+                    e4 = 0;                  // Lane 4
+                    e5 = 0;                  // Lane 5
+                    e6 = 0;                  // Lane 6
+                    e7 = 0;                  // Lane 7
+
+                    $display("[DUT] T5-partial cycle%0d: dout={%0d,%0d,%0d,%0d,%0d,%0d,%0d,%0d}",
+                        s5, dout0, dout1, dout2, dout3, dout4, dout5, dout6, dout7);
+
+                    check_output(e0, e1, e2, e3, e4, e5, e6, e7, "T5-partial");
+
+                    @(posedge clk);
+                end
+            end
+
+            $display("[TEST 5] checks=%0d mismatches=%0d",
+                check_cnt - t5_check_start, mismatch_cnt - t5_mismatch_start);
+        end
     end
 
     // ---------------------------------------------------------------
@@ -534,10 +660,10 @@ module tb_reverse_inplace_transpose;
         $display("  Total check cycles : %0d", check_cnt);
         $display("  Total mismatches   : %0d", mismatch_cnt);
         $display("============================================");
-        if (mismatch_cnt == 0 && check_cnt >= 40)
+        if (mismatch_cnt == 0 && check_cnt >= 48)
             $display("[PASS] reverse_inplace_transpose all tests passed (%0d checks)", check_cnt);
-        else if (check_cnt < 40)
-            $display("[WARN] Only %0d / 40 expected checks completed", check_cnt);
+        else if (check_cnt < 48)
+            $display("[WARN] Only %0d / 48 expected checks completed", check_cnt);
         else
             $display("[FAIL] reverse_inplace_transpose tests FAILED (%0d mismatches)", mismatch_cnt);
         $display("============================================");

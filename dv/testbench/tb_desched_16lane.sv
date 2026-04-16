@@ -1,34 +1,34 @@
 // =============================================================================
-// Testbench: tb_16lane (Descheduler)
+// Testbench: tb_desched_16lane (Descheduler Stage1)
 // DUT: inplace_transpose_buf_multi_lane_descheduler (DATA_W=8, lane_mode=16L)
 //
 // Clock:
 //   clk_in  period = 10ns  (100 MHz, fast clock)
 //   clk_out period = 40ns  (25 MHz, slow clock = clk_in / 4)
 //
-// 16L mode: descheduler receives chunk-format serialized data and outputs
-// per-lane-per-cycle format (inverse transpose).
+// 16L mode: descheduler receives 4 fast-clock phases per slow cycle.
+// No rotation in 16L mode. Stage1 outputs chunk format directly.
 //
-// Input stimulus (simulating scheduler output after 8lane_2beat):
-//   4 slow cycles × 4 phases = 16 fast beats
-//   Each slow cycle represents one lane index across all 4 groups:
-//     slow0: Lane0[0..3], Lane4[0..3], Lane8[0..3], Lane12[0..3]
-//     slow1: Lane1[0..3], Lane5[0..3], Lane9[0..3], Lane13[0..3]
-//     slow2: Lane2[0..3], Lane6[0..3], Lane10[0..3], Lane14[0..3]
-//     slow3: Lane3[0..3], Lane7[0..3], Lane11[0..3], Lane15[0..3]
+// Input stimulus (simulating scheduler output):
+//   slow0: phase0={10..13}, phase1={14..17}, phase2={18..1b}, phase3={1c..1f}
+//   slow1: phase0={20..23}, phase1={24..27}, phase2={28..2b}, phase3={2c..2f}
+//   slow2: phase0={30..33}, phase1={34..37}, phase2={38..3b}, phase3={3c..3f}
+//   slow3: phase0={40..43}, phase1={44..47}, phase2={48..4b}, phase3={4c..4f}
 //
-// Expected output (per-lane-per-cycle):
-//   cycle0: a_top={L0[0],L1[0],L2[0],L3[0]} a_bot={L4[0]..} b_top={L8[0]..} b_bot={L12[0]..}
-//   cycle1: a_top={L0[1],L1[1],L2[1],L3[1]} ...
-//   cycle2: a_top={L0[2],L1[2],L2[2],L3[2]} ...
-//   cycle3: a_top={L0[3],L1[3],L2[3],L3[3]} ...
+// Direct mapping (no rotation): phase0->a_top, phase1->a_bot, phase2->b_top, phase3->b_bot
+//
+// Expected chunk-format output per slow cycle:
+//   slow0: a_top={10,11,12,13} a_bot={14,15,16,17} b_top={18,19,1a,1b} b_bot={1c,1d,1e,1f}
+//   slow1: a_top={20,21,22,23} a_bot={24,25,26,27} b_top={28,29,2a,2b} b_bot={2c,2d,2e,2f}
+//   slow2: a_top={30,31,32,33} a_bot={34,35,36,37} b_top={38,39,3a,3b} b_bot={3c,3d,3e,3f}
+//   slow3: a_top={40,41,42,43} a_bot={44,45,46,47} b_top={48,49,4a,4b} b_bot={4c,4d,4e,4f}
 //
 // VCD: wave_16lane_desched.vcd
 // =============================================================================
 
 `timescale 1ns/1ps
 
-module tb_16lane;
+module tb_desched_16lane;
 
     localparam DATA_W       = 8;
     localparam CLK_IN_HALF  = 5;    // 10ns period (fast)
@@ -71,7 +71,7 @@ module tb_16lane;
 
     initial begin
         $dumpfile("wave_16lane_desched.vcd");
-        $dumpvars(0, tb_16lane);
+        $dumpvars(0, tb_desched_16lane);
     end
 
     // Reset
@@ -84,25 +84,22 @@ module tb_16lane;
         rst_n = 1;
     end
 
-    // Stimulus: 16 fast beats (4 slow cycles × 4 phases)
-    // slow0: Lane0 chunk → a_top, Lane4 chunk → a_bot, Lane8 chunk → b_top, Lane12 chunk → b_bot
-    // slow1: Lane1, Lane5, Lane9, Lane13
-    // slow2: Lane2, Lane6, Lane10, Lane14
-    // slow3: Lane3, Lane7, Lane11, Lane15
+    // Stimulus: 16 fast beats (4 slow cycles x 4 phases)
+    // No rotation in 16L mode.
     initial begin
         repeat(4) @(posedge clk_in);
 
-        // --- slow cycle 0: Lane0, Lane4, Lane8, Lane12 ---
+        // --- slow cycle 0 ---
         @(posedge clk_in); valid_in = 1;
-        din0=8'h10; din1=8'h11; din2=8'h12; din3=8'h13;  // a_top: Lane0[0..3]
+        din0=8'h10; din1=8'h11; din2=8'h12; din3=8'h13;  // phase0 -> a_top
         @(posedge clk_in);
-        din0=8'h14; din1=8'h15; din2=8'h16; din3=8'h17;  // a_bot: Lane4[0..3]
+        din0=8'h14; din1=8'h15; din2=8'h16; din3=8'h17;  // phase1 -> a_bot
         @(posedge clk_in);
-        din0=8'h18; din1=8'h19; din2=8'h1a; din3=8'h1b;  // b_top: Lane8[0..3]
+        din0=8'h18; din1=8'h19; din2=8'h1a; din3=8'h1b;  // phase2 -> b_top
         @(posedge clk_in);
-        din0=8'h1c; din1=8'h1d; din2=8'h1e; din3=8'h1f;  // b_bot: Lane12[0..3]
+        din0=8'h1c; din1=8'h1d; din2=8'h1e; din3=8'h1f;  // phase3 -> b_bot
 
-        // --- slow cycle 1: Lane1, Lane5, Lane9, Lane13 ---
+        // --- slow cycle 1 ---
         @(posedge clk_in);
         din0=8'h20; din1=8'h21; din2=8'h22; din3=8'h23;
         @(posedge clk_in);
@@ -112,7 +109,7 @@ module tb_16lane;
         @(posedge clk_in);
         din0=8'h2c; din1=8'h2d; din2=8'h2e; din3=8'h2f;
 
-        // --- slow cycle 2: Lane2, Lane6, Lane10, Lane14 ---
+        // --- slow cycle 2 ---
         @(posedge clk_in);
         din0=8'h30; din1=8'h31; din2=8'h32; din3=8'h33;
         @(posedge clk_in);
@@ -122,7 +119,7 @@ module tb_16lane;
         @(posedge clk_in);
         din0=8'h3c; din1=8'h3d; din2=8'h3e; din3=8'h3f;
 
-        // --- slow cycle 3: Lane3, Lane7, Lane11, Lane15 ---
+        // --- slow cycle 3 ---
         @(posedge clk_in);
         din0=8'h40; din1=8'h41; din2=8'h42; din3=8'h43;
         @(posedge clk_in);
@@ -166,22 +163,47 @@ module tb_16lane;
         if (b_bot3!==e_bb3) begin $display("[MISMATCH] #%0d b_bot3=%0h exp=%0h",check_cnt,b_bot3,e_bb3); mismatch_cnt=mismatch_cnt+1; end
     endtask
 
-    // Expected output: per-lane-per-cycle (inverse transpose)
-    // a_top = {Lane0[t], Lane1[t], Lane2[t], Lane3[t]}
-    // a_bot = {Lane4[t], Lane5[t], Lane6[t], Lane7[t]}
-    // b_top = {Lane8[t], Lane9[t], Lane10[t], Lane11[t]}
-    // b_bot = {Lane12[t], Lane13[t], Lane14[t], Lane15[t]}
+    // --- DUT output monitor (always active) ---
     always @(posedge clk_out) begin
         if (rst_n && valid_out) begin
             $display("[DUT] a_top={%0h,%0h,%0h,%0h} a_bot={%0h,%0h,%0h,%0h} b_top={%0h,%0h,%0h,%0h} b_bot={%0h,%0h,%0h,%0h}",
                 a_top0,a_top1,a_top2,a_top3, a_bot0,a_bot1,a_bot2,a_bot3,
                 b_top0,b_top1,b_top2,b_top3, b_bot0,b_bot1,b_bot2,b_bot3);
+        end
+    end
+
+    // Golden checker: chunk-format output, direct phase mapping (no rotation)
+    always @(posedge clk_out) begin
+        if (rst_n && valid_out) begin
             case (exp_idx)
-                //        a_top                    a_bot                    b_top                    b_bot
-                0: check16(8'h10,8'h20,8'h30,8'h40, 8'h14,8'h24,8'h34,8'h44, 8'h18,8'h28,8'h38,8'h48, 8'h1c,8'h2c,8'h3c,8'h4c);
-                1: check16(8'h11,8'h21,8'h31,8'h41, 8'h15,8'h25,8'h35,8'h45, 8'h19,8'h29,8'h39,8'h49, 8'h1d,8'h2d,8'h3d,8'h4d);
-                2: check16(8'h12,8'h22,8'h32,8'h42, 8'h16,8'h26,8'h36,8'h46, 8'h1a,8'h2a,8'h3a,8'h4a, 8'h1e,8'h2e,8'h3e,8'h4e);
-                3: check16(8'h13,8'h23,8'h33,8'h43, 8'h17,8'h27,8'h37,8'h47, 8'h1b,8'h2b,8'h3b,8'h4b, 8'h1f,8'h2f,8'h3f,8'h4f);
+                // slow0: phase0->a_top, phase1->a_bot, phase2->b_top, phase3->b_bot
+                0: check16(
+                    8'h10, 8'h11, 8'h12, 8'h13,  // a_top
+                    8'h14, 8'h15, 8'h16, 8'h17,  // a_bot
+                    8'h18, 8'h19, 8'h1a, 8'h1b,  // b_top
+                    8'h1c, 8'h1d, 8'h1e, 8'h1f   // b_bot
+                );
+                // slow1
+                1: check16(
+                    8'h20, 8'h21, 8'h22, 8'h23,
+                    8'h24, 8'h25, 8'h26, 8'h27,
+                    8'h28, 8'h29, 8'h2a, 8'h2b,
+                    8'h2c, 8'h2d, 8'h2e, 8'h2f
+                );
+                // slow2
+                2: check16(
+                    8'h30, 8'h31, 8'h32, 8'h33,
+                    8'h34, 8'h35, 8'h36, 8'h37,
+                    8'h38, 8'h39, 8'h3a, 8'h3b,
+                    8'h3c, 8'h3d, 8'h3e, 8'h3f
+                );
+                // slow3
+                3: check16(
+                    8'h40, 8'h41, 8'h42, 8'h43,
+                    8'h44, 8'h45, 8'h46, 8'h47,
+                    8'h48, 8'h49, 8'h4a, 8'h4b,
+                    8'h4c, 8'h4d, 8'h4e, 8'h4f
+                );
                 default: $display("[WARN] Unexpected valid_out at exp_idx=%0d", exp_idx);
             endcase
             exp_idx = exp_idx + 1;
@@ -202,11 +224,11 @@ module tb_16lane;
         $display("[INFO] Total check cycles : %0d", check_cnt);
         $display("[INFO] Total mismatches   : %0d", mismatch_cnt);
         if (mismatch_cnt == 0 && check_cnt >= 4)
-            $display("[PASS] 16L descheduler test passed");
+            $display("[PASS] 16L descheduler chunk-format test passed");
         else if (check_cnt < 4)
             $display("[WARN] Only %0d / 4 golden cycles checked", check_cnt);
         else
-            $display("[FAIL] 16L descheduler test FAILED");
+            $display("[FAIL] 16L descheduler chunk-format test FAILED");
         $display("--------------------------------------------");
         $finish;
     end

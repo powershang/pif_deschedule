@@ -19,10 +19,10 @@ dd/rtl/inplace_transpose_buf_multi_lane_descheduler_top.v
 dv/testbench/tb_8n_align.sv
 dv/testbench/tb_inplace_transpose_buf_4lane_2beat.sv
 dv/testbench/tb_inplace_transpose_buf_8lane_2beat.sv
-dv/testbench/tb_4lane.sv
-dv/testbench/tb_8lane.sv
-dv/testbench/tb_12lane.sv
-dv/testbench/tb_16lane.sv
+dv/testbench/tb_desched_4lane.sv
+dv/testbench/tb_desched_8lane.sv
+dv/testbench/tb_desched_12lane.sv
+dv/testbench/tb_desched_16lane.sv
 dv/testbench/tb_loopback.sv
 dv/testbench/tb_loopback_compact.sv
 dv/testbench/tb_loopback_desched_top.sv

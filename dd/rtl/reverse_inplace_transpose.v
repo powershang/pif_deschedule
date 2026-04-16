@@ -154,6 +154,11 @@ module reverse_inplace_transpose (
     // =========================================================================
     wire fresh_burst = valid_in & ~prev_valid;
 
+    // Effective write address: on fresh_burst, force row=0, sel=0 because
+    // the NBA for wr_row/wr_sel hasn't taken effect yet this cycle.
+    wire [2:0] wr_row_eff = fresh_burst ? 3'd0 : wr_row;
+    wire       wr_sel_eff = fresh_burst ? 1'b0 : wr_sel;
+
     // =========================================================================
     // Write completion detection
     // =========================================================================
@@ -221,28 +226,30 @@ module reverse_inplace_transpose (
             end
 
             // --- Write data ---
+            // On fresh_burst, wr_sel/wr_row NBA haven't taken effect yet.
+            // Use wr_row_eff/wr_sel_eff so the first chunk lands at row 0, buf 0.
             if (valid_in) begin
                 if (mode == MODE_PHY) begin
                     if (lane_cfg == LANE8) begin
                         // LANE8 PHY: write full row per beat
-                        if (wr_sel == 1'b0) begin
-                            buf_0[wr_row][0] <= din_top0;
-                            buf_0[wr_row][1] <= din_top1;
-                            buf_0[wr_row][2] <= din_top2;
-                            buf_0[wr_row][3] <= din_top3;
-                            buf_0[wr_row][4] <= din_bot0;
-                            buf_0[wr_row][5] <= din_bot1;
-                            buf_0[wr_row][6] <= din_bot2;
-                            buf_0[wr_row][7] <= din_bot3;
+                        if (wr_sel_eff) begin
+                            buf_1[wr_row_eff][0] <= din_top0;
+                            buf_1[wr_row_eff][1] <= din_top1;
+                            buf_1[wr_row_eff][2] <= din_top2;
+                            buf_1[wr_row_eff][3] <= din_top3;
+                            buf_1[wr_row_eff][4] <= din_bot0;
+                            buf_1[wr_row_eff][5] <= din_bot1;
+                            buf_1[wr_row_eff][6] <= din_bot2;
+                            buf_1[wr_row_eff][7] <= din_bot3;
                         end else begin
-                            buf_1[wr_row][0] <= din_top0;
-                            buf_1[wr_row][1] <= din_top1;
-                            buf_1[wr_row][2] <= din_top2;
-                            buf_1[wr_row][3] <= din_top3;
-                            buf_1[wr_row][4] <= din_bot0;
-                            buf_1[wr_row][5] <= din_bot1;
-                            buf_1[wr_row][6] <= din_bot2;
-                            buf_1[wr_row][7] <= din_bot3;
+                            buf_0[wr_row_eff][0] <= din_top0;
+                            buf_0[wr_row_eff][1] <= din_top1;
+                            buf_0[wr_row_eff][2] <= din_top2;
+                            buf_0[wr_row_eff][3] <= din_top3;
+                            buf_0[wr_row_eff][4] <= din_bot0;
+                            buf_0[wr_row_eff][5] <= din_bot1;
+                            buf_0[wr_row_eff][6] <= din_bot2;
+                            buf_0[wr_row_eff][7] <= din_bot3;
                         end
 
                         if (fresh_burst) begin
@@ -264,7 +271,7 @@ module reverse_inplace_transpose (
                         // LANE4 PHY: two beats per row (first half / second half)
                         if (fresh_burst) begin
                             // First beat of new burst: write top half of row 0
-                            if (wr_sel == 1'b0) begin
+                            if (wr_sel_eff == 1'b0) begin
                                 buf_0[0][0] <= din_top0;
                                 buf_0[0][1] <= din_top1;
                                 buf_0[0][2] <= din_top2;
@@ -279,30 +286,30 @@ module reverse_inplace_transpose (
                             wr_row  <= 3'd0;
                         end else if (l4_beat == 1'b0) begin
                             // First beat of row: write cols [0:3]
-                            if (wr_sel == 1'b0) begin
-                                buf_0[wr_row][0] <= din_top0;
-                                buf_0[wr_row][1] <= din_top1;
-                                buf_0[wr_row][2] <= din_top2;
-                                buf_0[wr_row][3] <= din_top3;
+                            if (wr_sel_eff == 1'b0) begin
+                                buf_0[wr_row_eff][0] <= din_top0;
+                                buf_0[wr_row_eff][1] <= din_top1;
+                                buf_0[wr_row_eff][2] <= din_top2;
+                                buf_0[wr_row_eff][3] <= din_top3;
                             end else begin
-                                buf_1[wr_row][0] <= din_top0;
-                                buf_1[wr_row][1] <= din_top1;
-                                buf_1[wr_row][2] <= din_top2;
-                                buf_1[wr_row][3] <= din_top3;
+                                buf_1[wr_row_eff][0] <= din_top0;
+                                buf_1[wr_row_eff][1] <= din_top1;
+                                buf_1[wr_row_eff][2] <= din_top2;
+                                buf_1[wr_row_eff][3] <= din_top3;
                             end
                             l4_beat <= 1'b1;
                         end else begin
                             // Second beat of row: write cols [4:7]
-                            if (wr_sel == 1'b0) begin
-                                buf_0[wr_row][4] <= din_top0;
-                                buf_0[wr_row][5] <= din_top1;
-                                buf_0[wr_row][6] <= din_top2;
-                                buf_0[wr_row][7] <= din_top3;
+                            if (wr_sel_eff == 1'b0) begin
+                                buf_0[wr_row_eff][4] <= din_top0;
+                                buf_0[wr_row_eff][5] <= din_top1;
+                                buf_0[wr_row_eff][6] <= din_top2;
+                                buf_0[wr_row_eff][7] <= din_top3;
                             end else begin
-                                buf_1[wr_row][4] <= din_top0;
-                                buf_1[wr_row][5] <= din_top1;
-                                buf_1[wr_row][6] <= din_top2;
-                                buf_1[wr_row][7] <= din_top3;
+                                buf_1[wr_row_eff][4] <= din_top0;
+                                buf_1[wr_row_eff][5] <= din_top1;
+                                buf_1[wr_row_eff][6] <= din_top2;
+                                buf_1[wr_row_eff][7] <= din_top3;
                             end
                             l4_beat <= 1'b0;
                             if (wr_row == 3'd3) begin
@@ -335,7 +342,7 @@ module reverse_inplace_transpose (
                     //   row 2*vlane+1  (=vl_row_hi) gets chunk[1,3,5,7]
                     // Columns vl_col_base..vl_col_base+3.
                     // ============================================================
-                    if (wr_sel == 1'b0) begin
+                    if (wr_sel_eff == 1'b0) begin
                         buf_0[vl_row_lo][vl_col_base + 3'd0] <= din_top0;  // chunk[0]
                         buf_0[vl_row_lo][vl_col_base + 3'd1] <= din_top2;  // chunk[2]
                         buf_0[vl_row_lo][vl_col_base + 3'd2] <= din_bot0;  // chunk[4]
@@ -400,7 +407,7 @@ module reverse_inplace_transpose (
                     //
                     // Rows 4..7 are zero-filled (only 2 vlanes are active).
                     // ============================================================
-                    if (wr_sel == 1'b0) begin
+                    if (wr_sel_eff == 1'b0) begin
                         buf_0[vl4_base_row        ][vl4_base_col        ] <= din_top0;
                         buf_0[vl4_base_row | 3'd1 ][vl4_base_col        ] <= din_top1;
                         buf_0[vl4_base_row        ][vl4_base_col | 3'd1 ] <= din_top2;
@@ -417,7 +424,7 @@ module reverse_inplace_transpose (
                     if (vl_beat == 3'd0) begin
                         for (i = 4; i < 8; i = i + 1) begin
                             for (j = 0; j < 8; j = j + 1) begin
-                                if (wr_sel == 1'b0) begin
+                                if (wr_sel_eff == 1'b0) begin
                                     buf_0[i][j] <= {DATA_W{1'b0}};
                                 end else begin
                                     buf_1[i][j] <= {DATA_W{1'b0}};
@@ -454,7 +461,7 @@ module reverse_inplace_transpose (
                         for (i = 0; i < 8; i = i + 1) begin
                             if (i[2:0] >= wr_row) begin
                                 for (j = 0; j < 8; j = j + 1) begin
-                                    if (wr_sel == 1'b0) begin
+                                    if (wr_sel_eff == 1'b0) begin
                                         buf_0[i][j] <= {DATA_W{1'b0}};
                                     end else begin
                                         buf_1[i][j] <= {DATA_W{1'b0}};
@@ -469,7 +476,7 @@ module reverse_inplace_transpose (
                         for (i = 0; i < 8; i = i + 1) begin
                             if (i[2:0] >= wr_row || i[2:0] >= 3'd4) begin
                                 for (j = 0; j < 8; j = j + 1) begin
-                                    if (wr_sel == 1'b0) begin
+                                    if (wr_sel_eff == 1'b0) begin
                                         buf_0[i][j] <= {DATA_W{1'b0}};
                                     end else begin
                                         buf_1[i][j] <= {DATA_W{1'b0}};
@@ -487,7 +494,7 @@ module reverse_inplace_transpose (
                     // data anyway.
                     for (i = 0; i < 8; i = i + 1) begin
                         for (j = 0; j < 8; j = j + 1) begin
-                            if (wr_sel == 1'b0) begin
+                            if (wr_sel_eff == 1'b0) begin
                                 buf_0[i][j] <= {DATA_W{1'b0}};
                             end else begin
                                 buf_1[i][j] <= {DATA_W{1'b0}};

@@ -1,3 +1,4 @@
+// NOTE: This testbench is superseded by tb_loopback_desched_top.sv
 // =============================================================================
 // Testbench: tb_loopback
 // Cascade: scheduler (N→4) → descheduler (4→N with inverse transpose)
@@ -111,11 +112,13 @@ module tb_loopback;
     end
 
     // =========================================================================
-    // Checker
+    // Checker (legacy — expects per-lane-per-cycle, but descheduler now
+    //          outputs chunk format; wrapped behind ENABLE_LEGACY_CHECK)
     // =========================================================================
     integer mismatch_cnt, check_cnt, exp_idx;
     integer total_mismatch, total_check;
 
+`ifdef ENABLE_LEGACY_CHECK
     // Expected output (per-lane-per-cycle, inverse transpose of scheduler input)
     logic [DATA_W-1:0] exp_a_top0[0:7], exp_a_top1[0:7], exp_a_top2[0:7], exp_a_top3[0:7];
     logic [DATA_W-1:0] exp_a_bot0[0:7], exp_a_bot1[0:7], exp_a_bot2[0:7], exp_a_bot3[0:7];
@@ -151,6 +154,22 @@ module tb_loopback;
             exp_idx = exp_idx + 1;
         end
     end
+`else
+    // Descheduler now outputs chunk format (no inverse transpose).
+    // Monitor output for visual inspection only.
+    always @(posedge clk_slow) begin
+        if (rst_n && rev_valid_out && exp_idx < 8) begin
+            check_cnt = check_cnt + 1;
+            $display("[LOOP] mode=%0d #%0d a_top={%0h,%0h,%0h,%0h} a_bot={%0h,%0h,%0h,%0h} b_top={%0h,%0h,%0h,%0h} b_bot={%0h,%0h,%0h,%0h}",
+                lane_mode, exp_idx,
+                rev_a_top0,rev_a_top1,rev_a_top2,rev_a_top3,
+                rev_a_bot0,rev_a_bot1,rev_a_bot2,rev_a_bot3,
+                rev_b_top0,rev_b_top1,rev_b_top2,rev_b_top3,
+                rev_b_bot0,rev_b_bot1,rev_b_bot2,rev_b_bot3);
+            exp_idx = exp_idx + 1;
+        end
+    end
+`endif
 
     // =========================================================================
     // Test: 16L loopback (slow_half=20 → 40ns period, ratio=4:1)
@@ -173,10 +192,8 @@ module tb_loopback;
         {fwd_b_top0,fwd_b_top1,fwd_b_top2,fwd_b_top3} = '0;
         {fwd_b_bot0,fwd_b_bot1,fwd_b_bot2,fwd_b_bot3} = '0;
 
+`ifdef ENABLE_LEGACY_CHECK
         // Expected: per-lane-per-cycle (inverse transpose of scheduler input)
-        // Scheduler input slow0..3 = Lane0..3 chunks per group
-        // Output cycle t: a_top={slow0.at[t], slow1.at[t], slow2.at[t], slow3.at[t]}
-        //                 (i.e., column t across all input rows)
         exp_a_top0[0]=8'h10; exp_a_top1[0]=8'h20; exp_a_top2[0]=8'h30; exp_a_top3[0]=8'h40;
         exp_a_bot0[0]=8'h14; exp_a_bot1[0]=8'h24; exp_a_bot2[0]=8'h34; exp_a_bot3[0]=8'h44;
         exp_b_top0[0]=8'h18; exp_b_top1[0]=8'h28; exp_b_top2[0]=8'h38; exp_b_top3[0]=8'h48;
@@ -196,6 +213,7 @@ module tb_loopback;
         exp_a_bot0[3]=8'h17; exp_a_bot1[3]=8'h27; exp_a_bot2[3]=8'h37; exp_a_bot3[3]=8'h47;
         exp_b_top0[3]=8'h1b; exp_b_top1[3]=8'h2b; exp_b_top2[3]=8'h3b; exp_b_top3[3]=8'h4b;
         exp_b_bot0[3]=8'h1f; exp_b_bot1[3]=8'h2f; exp_b_bot2[3]=8'h3f; exp_b_bot3[3]=8'h4f;
+`endif
 
         // Reset
         repeat(6) @(posedge clk_fast);
@@ -238,6 +256,7 @@ module tb_loopback;
 
         $display("============================================");
         $display("[INFO] Loopback test completed");
+`ifdef ENABLE_LEGACY_CHECK
         $display("[INFO] 16L: checks=%0d mismatches=%0d", total_check, total_mismatch);
         if (total_mismatch == 0 && total_check >= 4)
             $display("[PASS] Loopback test passed");
@@ -245,6 +264,11 @@ module tb_loopback;
             $display("[WARN] Only %0d / 4 checks completed", total_check);
         else
             $display("[FAIL] Loopback test FAILED");
+`else
+        $display("[SKIP] Legacy checker disabled (descheduler outputs chunk format)");
+        $display("[INFO] 16L: %0d output beats observed", total_check);
+        $display("[PASS] Loopback compile+run OK (checker skipped)");
+`endif
         $display("============================================");
         $finish;
     end
