@@ -63,7 +63,8 @@ module lane_compactor (
     a_top0, a_top1, a_top2, a_top3,
     a_bot0, a_bot1, a_bot2, a_bot3,
     b_top0, b_top1, b_top2, b_top3,
-    b_bot0, b_bot1, b_bot2, b_bot3
+    b_bot0, b_bot1, b_bot2, b_bot3,
+    burst_len_error
 );
     parameter DATA_W  = 32;
     parameter CNT_W   = 8;   // beat counter width (covers >> largest expected burst)
@@ -96,6 +97,10 @@ module lane_compactor (
     output [DATA_W-1:0] a_bot0, a_bot1, a_bot2, a_bot3;
     output [DATA_W-1:0] b_top0, b_top1, b_top2, b_top3;
     output [DATA_W-1:0] b_bot0, b_bot1, b_bot2, b_bot3;
+    // Sticky error: at valid_in falling edge, burst length was not a multiple
+    // of 4 fast cycles. Sets when wr_phase != 0 at the cycle valid_in goes
+    // low. Cleared on rst_n or on the next fresh_burst.
+    output reg         burst_len_error;
 
     // -------------------------------------------------------------------------
     // clk_in_fast domain: wr_phase[1:0] counter + reg_a / reg_b capture
@@ -140,6 +145,28 @@ module lane_compactor (
     // reg_b capture (wr_phase == 1  AND NOT fresh_burst).  Fresh-burst
     // cycle goes to reg_a, never reg_b.
     wire cap_b = valid_in & ~fresh_burst & (wr_phase == 2'd1);
+
+    // -------------------------------------------------------------------------
+    // burst_len_error : sticky flag, asserts at the clk_in_fast cycle that
+    // valid_in falls (1 -> 0) if the burst was not a multiple of 4 fast
+    // cycles. The compactor consumes input in groups of 4 (cap_a on phase 0,
+    // cap_b on phase 1, drop phase 2/3); a non-multiple-of-4 burst leaves
+    // wr_phase != 0 at end-of-burst, which means either the trailing reg_a
+    // has no matching reg_b, or trailing input samples were silently dropped
+    // -- both result in downstream rd_phase mis-pairing. Cleared by rst_n or
+    // by the next fresh_burst.
+    wire valid_in_fall = ~valid_in & valid_in_d1;
+    wire burst_len_bad = valid_in_fall & (wr_phase != 2'd0);
+
+    always @(posedge clk_in_fast or negedge rst_n) begin
+        if (!rst_n) begin
+            burst_len_error <= 1'b0;
+        end else if (fresh_burst) begin
+            burst_len_error <= 1'b0;
+        end else if (burst_len_bad) begin
+            burst_len_error <= 1'b1;
+        end
+    end
 
     always @(posedge clk_in_fast or negedge rst_n) begin
         if (!rst_n) begin

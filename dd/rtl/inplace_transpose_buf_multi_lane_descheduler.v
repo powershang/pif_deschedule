@@ -197,22 +197,6 @@ module inplace_transpose_buf_multi_lane_descheduler (
     reg        col_done_toggle_d;
     wire       toggle_changed = (col_done_toggle != col_done_toggle_d);
 
-    // Burst boundary detection: sync valid_in into clk_out domain
-    reg        valid_in_sync1, valid_in_sync2, valid_in_sync3;
-    wire       burst_end = valid_in_sync3 & ~valid_in_sync2;  // falling edge of synced valid_in
-
-    always @(posedge clk_out or negedge rst_n) begin
-        if (!rst_n) begin
-            valid_in_sync1 <= 1'b0;
-            valid_in_sync2 <= 1'b0;
-            valid_in_sync3 <= 1'b0;
-        end else begin
-            valid_in_sync1 <= valid_in;
-            valid_in_sync2 <= valid_in_sync1;
-            valid_in_sync3 <= valid_in_sync2;
-        end
-    end
-
     // De-rotated hold values (wires)
     wire [DATA_W-1:0] derot_at0, derot_at1, derot_at2, derot_at3;
     wire [DATA_W-1:0] derot_ab0, derot_ab1, derot_ab2, derot_ab3;

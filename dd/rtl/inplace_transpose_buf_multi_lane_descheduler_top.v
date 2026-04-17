@@ -21,6 +21,7 @@ module inplace_transpose_buf_multi_lane_descheduler_top (
     a_bot0, a_bot1, a_bot2, a_bot3,
     b_top0, b_top1, b_top2, b_top3,
     b_bot0, b_bot1, b_bot2, b_bot3,
+    burst_len_error,
     dbg_state, dbg_fifo_cnt
 );
     parameter DATA_W = 32;
@@ -44,6 +45,7 @@ module inplace_transpose_buf_multi_lane_descheduler_top (
     output [DATA_W-1:0] a_bot0, a_bot1, a_bot2, a_bot3;
     output [DATA_W-1:0] b_top0, b_top1, b_top2, b_top3;
     output [DATA_W-1:0] b_bot0, b_bot1, b_bot2, b_bot3;
+    output             burst_len_error;
     output [2:0]       dbg_state;
     output [3:0]       dbg_fifo_cnt;
 
@@ -177,7 +179,8 @@ module inplace_transpose_buf_multi_lane_descheduler_top (
         .a_top0(a_top0), .a_top1(a_top1), .a_top2(a_top2), .a_top3(a_top3),
         .a_bot0(a_bot0), .a_bot1(a_bot1), .a_bot2(a_bot2), .a_bot3(a_bot3),
         .b_top0(b_top0), .b_top1(b_top1), .b_top2(b_top2), .b_top3(b_top3),
-        .b_bot0(b_bot0), .b_bot1(b_bot1), .b_bot2(b_bot2), .b_bot3(b_bot3)
+        .b_bot0(b_bot0), .b_bot1(b_bot1), .b_bot2(b_bot2), .b_bot3(b_bot3),
+        .burst_len_error(burst_len_error)
     );
 
 endmodule
