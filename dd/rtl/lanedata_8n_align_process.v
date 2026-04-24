@@ -135,68 +135,66 @@ module lanedata_8n_align_process (
     reg       rem_is_odd_d;
 
     always @(*) begin : p_pad_total
-        pad_total_d  = 3'd0;
-        rem_is_odd_d = 1'b0;
         if (align_mode && !vlane) begin
             // 8N PHY: chunk = 8 beats, pad to chunk boundary (8 beats).
             case (rem_now)
-                3'd0: pad_total_d = 3'd0;
-                3'd1: begin pad_total_d = 3'd7; rem_is_odd_d = 1'b1; end
-                3'd2: pad_total_d = 3'd6;
-                3'd3: begin pad_total_d = 3'd5; rem_is_odd_d = 1'b1; end
-                3'd4: pad_total_d = 3'd4;
-                3'd5: begin pad_total_d = 3'd3; rem_is_odd_d = 1'b1; end
-                3'd6: pad_total_d = 3'd2;
-                3'd7: begin pad_total_d = 3'd1; rem_is_odd_d = 1'b1; end
-                default: pad_total_d = 3'd0;
+                3'd0:    begin pad_total_d = 3'd0; rem_is_odd_d = 1'b0; end
+                3'd1:    begin pad_total_d = 3'd7; rem_is_odd_d = 1'b1; end
+                3'd2:    begin pad_total_d = 3'd6; rem_is_odd_d = 1'b0; end
+                3'd3:    begin pad_total_d = 3'd5; rem_is_odd_d = 1'b1; end
+                3'd4:    begin pad_total_d = 3'd4; rem_is_odd_d = 1'b0; end
+                3'd5:    begin pad_total_d = 3'd3; rem_is_odd_d = 1'b1; end
+                3'd6:    begin pad_total_d = 3'd2; rem_is_odd_d = 1'b0; end
+                3'd7:    begin pad_total_d = 3'd1; rem_is_odd_d = 1'b1; end
+                default: begin pad_total_d = 3'd0; rem_is_odd_d = 1'b0; end
             endcase
         end else if (align_mode && vlane) begin
             // 8N VLANE: chunk = 4 beats, pad to chunk boundary (4 beats).
             case (rem_now)
-                3'd0: pad_total_d = 3'd0;
-                3'd1: begin pad_total_d = 3'd3; rem_is_odd_d = 1'b1; end
-                3'd2: pad_total_d = 3'd2;
-                3'd3: begin pad_total_d = 3'd1; rem_is_odd_d = 1'b1; end
-                default: pad_total_d = 3'd0;
+                3'd0:    begin pad_total_d = 3'd0; rem_is_odd_d = 1'b0; end
+                3'd1:    begin pad_total_d = 3'd3; rem_is_odd_d = 1'b1; end
+                3'd2:    begin pad_total_d = 3'd2; rem_is_odd_d = 1'b0; end
+                3'd3:    begin pad_total_d = 3'd1; rem_is_odd_d = 1'b1; end
+                default: begin pad_total_d = 3'd0; rem_is_odd_d = 1'b0; end
             endcase
         end else if (!align_mode && !vlane) begin
             // 4N PHY: chunk = 4 beats, pad to TWO-chunk boundary (8 beats).
-            // parity=0 : an even number of chunks already complete -> already 8-aligned
-            //            rem=0 -> pad 0 ; rem=r -> pad (8-r) (next chunk + remaining)
-            // parity=1 : an odd number of chunks already complete -> need a 4-beat top-up
-            //            rem=0 -> pad 4 ; rem=r -> pad (4-r) (finish the current chunk)
+            // parity=0 : even number of chunks complete -> already 8-aligned;
+            //            rem=0 -> pad 0 ; rem=r -> pad (8-r)
+            // parity=1 : odd number of chunks complete -> need 4-beat top-up;
+            //            rem=0 -> pad 4 ; rem=r -> pad (4-r)
             if (chunk_parity_q == 1'b0) begin
                 case (rem_now)
-                    3'd0: pad_total_d = 3'd0;
-                    3'd1: begin pad_total_d = 3'd7; rem_is_odd_d = 1'b1; end
-                    3'd2: pad_total_d = 3'd6;
-                    3'd3: begin pad_total_d = 3'd5; rem_is_odd_d = 1'b1; end
-                    default: pad_total_d = 3'd0;
+                    3'd0:    begin pad_total_d = 3'd0; rem_is_odd_d = 1'b0; end
+                    3'd1:    begin pad_total_d = 3'd7; rem_is_odd_d = 1'b1; end
+                    3'd2:    begin pad_total_d = 3'd6; rem_is_odd_d = 1'b0; end
+                    3'd3:    begin pad_total_d = 3'd5; rem_is_odd_d = 1'b1; end
+                    default: begin pad_total_d = 3'd0; rem_is_odd_d = 1'b0; end
                 endcase
             end else begin
                 case (rem_now)
-                    3'd0: pad_total_d = 3'd4;
-                    3'd1: begin pad_total_d = 3'd3; rem_is_odd_d = 1'b1; end
-                    3'd2: pad_total_d = 3'd2;
-                    3'd3: begin pad_total_d = 3'd1; rem_is_odd_d = 1'b1; end
-                    default: pad_total_d = 3'd0;
+                    3'd0:    begin pad_total_d = 3'd4; rem_is_odd_d = 1'b0; end
+                    3'd1:    begin pad_total_d = 3'd3; rem_is_odd_d = 1'b1; end
+                    3'd2:    begin pad_total_d = 3'd2; rem_is_odd_d = 1'b0; end
+                    3'd3:    begin pad_total_d = 3'd1; rem_is_odd_d = 1'b1; end
+                    default: begin pad_total_d = 3'd0; rem_is_odd_d = 1'b0; end
                 endcase
             end
         end else begin
             // 4N VLANE: chunk = 2 beats, pad to TWO-chunk boundary (4 beats).
-            // parity=0: already 4-aligned. rem=0 -> pad 0 ; rem=1 -> pad 3 (err)
-            // parity=1: one chunk complete. rem=0 -> pad 2 ; rem=1 -> pad 1 (err)
+            // parity=0 : already 4-aligned. rem=0 -> pad 0 ; rem=1 -> pad 3 (err)
+            // parity=1 : one chunk complete. rem=0 -> pad 2 ; rem=1 -> pad 1 (err)
             if (chunk_parity_q == 1'b0) begin
                 case (rem_now)
-                    3'd0: pad_total_d = 3'd0;
-                    3'd1: begin pad_total_d = 3'd3; rem_is_odd_d = 1'b1; end
-                    default: pad_total_d = 3'd0;
+                    3'd0:    begin pad_total_d = 3'd0; rem_is_odd_d = 1'b0; end
+                    3'd1:    begin pad_total_d = 3'd3; rem_is_odd_d = 1'b1; end
+                    default: begin pad_total_d = 3'd0; rem_is_odd_d = 1'b0; end
                 endcase
             end else begin
                 case (rem_now)
-                    3'd0: pad_total_d = 3'd2;
-                    3'd1: begin pad_total_d = 3'd1; rem_is_odd_d = 1'b1; end
-                    default: pad_total_d = 3'd0;
+                    3'd0:    begin pad_total_d = 3'd2; rem_is_odd_d = 1'b0; end
+                    3'd1:    begin pad_total_d = 3'd1; rem_is_odd_d = 1'b1; end
+                    default: begin pad_total_d = 3'd0; rem_is_odd_d = 1'b0; end
                 endcase
             end
         end
