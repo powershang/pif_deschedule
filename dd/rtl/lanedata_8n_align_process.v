@@ -298,24 +298,33 @@ module lanedata_8n_align_process (
 
     // =========================================================================
     // tail_buf[0] (Cn) and tail_buf[1] (Cn+1)
-    //   PHY:
-    //     8N:       tb0 at beat_mod_q==0, tb1 at beat_mod_q==1
-    //     4N:       tb0 at beat_mod_q[1:0]==0, tb1 at beat_mod_q[1:0]==1
-    //   VLANE: only tb0 (one beat carries both samples)
-    //     8N:       tb0 at beat_mod_q[1:0]==0
-    //     4N:       tb0 at beat_mod_q[0]==0
-    //   Fresh burst: tb0 <= current din (first beat of chunk).
+    //
+    // Per-mode write-enable wires. Each wire corresponds to a specific
+    // (align_mode, vlane) combination and captures exactly which beat_mod_q
+    // slot triggers a tail_buf update in that mode. The wires are mutually
+    // exclusive at runtime (only one can be high at a time because only one
+    // mode is active). Debug waveform can show 6 wires and see directly which
+    // mode's chunk-boundary just fired, without cross-referencing
+    // align_mode/vlane/beat_mod_q.
+    //
+    //   8N PHY   : chunk=8 beats; tb0 at beat_mod_q==0, tb1 at beat_mod_q==1
+    //   8N VLANE : chunk=4 beats; tb0 only at beat_mod_q[1:0]==0
+    //   4N PHY   : chunk=4 beats; tb0 at beat_mod_q[1:0]==0, tb1 at beat_mod_q[1:0]==1
+    //   4N VLANE : chunk=2 beats; tb0 only at beat_mod_q[0]==0
+    //   VLANE modes: only tb0 (one beat carries both Cn and Cn+1 samples)
+    //   Fresh burst: tb0 <= current din (first beat of chunk), all modes.
     // =========================================================================
-    wire tb0_cond_phy   = align_mode ? (beat_mod_q == 3'd0)
-                                     : (beat_mod_q[1:0] == 2'd0);
-    wire tb1_cond_phy   = align_mode ? (beat_mod_q == 3'd1)
-                                     : (beat_mod_q[1:0] == 2'd1);
-    wire tb0_cond_vlane = align_mode ? (beat_mod_q[1:0] == 2'd0)
-                                     : (beat_mod_q[0]   == 1'b0);
+    wire we_8n_phy_tb0   = valid_in & ~fresh_burst &  align_mode & ~vlane & (beat_mod_q      == 3'd0);
+    wire we_8n_phy_tb1   = valid_in & ~fresh_burst &  align_mode & ~vlane & (beat_mod_q      == 3'd1);
+    wire we_8n_vlane_tb0 = valid_in & ~fresh_burst &  align_mode &  vlane & (beat_mod_q[1:0] == 2'd0);
+    wire we_4n_phy_tb0   = valid_in & ~fresh_burst & ~align_mode & ~vlane & (beat_mod_q[1:0] == 2'd0);
+    wire we_4n_phy_tb1   = valid_in & ~fresh_burst & ~align_mode & ~vlane & (beat_mod_q[1:0] == 2'd1);
+    wire we_4n_vlane_tb0 = valid_in & ~fresh_burst & ~align_mode &  vlane & (beat_mod_q[0]   == 1'b0);
 
-    wire tb0_write_continuing = valid_in & ~fresh_burst &
-                                (vlane ? tb0_cond_vlane : tb0_cond_phy);
-    wire tb1_write_continuing = valid_in & ~fresh_burst & ~vlane & tb1_cond_phy;
+    // Combined write-enables (OR of the exclusive per-mode wires).
+    wire tb0_write_continuing = we_8n_phy_tb0 | we_8n_vlane_tb0 |
+                                we_4n_phy_tb0 | we_4n_vlane_tb0;
+    wire tb1_write_continuing = we_8n_phy_tb1 | we_4n_phy_tb1;
 
     reg [DATA_W-1:0] tail_buf [0:1][0:15];
     integer i_tb;
