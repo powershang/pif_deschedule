@@ -1,36 +1,40 @@
 `timescale 1ns/1ps
 
 // =============================================================================
-// lanedata_8n_align_process  (refactored, coding-style pass)
+// lanedata_8n_align_process  (option-B pad-to-8 rewrite)
 // =============================================================================
-// Burst padding preprocessor with dual alignment mode. Function is unchanged
-// vs the prior revision:
+// Burst padding preprocessor. Output length is always a multiple of 8 samples:
+//   - PHY  (1 beat = 1 sample)  -> output beats is a multiple of 8
+//   - VLANE(1 beat = 2 samples) -> output beats is a multiple of 4
+// Padding uses only Cn/Cn+1 replay from the last captured chunk; no zero-fill.
 //
 //   align_mode = 1 (8N-mode):
-//     Pads burst length to a multiple of 8 beats. Replay pattern alternates
-//     tail_buf[0] (Cn), tail_buf[1] (Cn+1). Odd rem -> error_flag = 1.
+//     Chunk size = 8 beats (PHY) or 4 beats (VLANE). A burst is already at
+//     or below one chunk-alignment unit; pad the remainder up to the chunk
+//     boundary. Odd rem -> error_flag = 1.
 //
 //   align_mode = 0 (4N-mode):
-//     Phase1 pads burst to next multiple of 4 with Cn/Cn+1 replay.
-//     Phase2 unconditionally appends 4 zero beats so total output is a
-//     multiple of 8. Odd rem4 -> error_flag = 1.
+//     Chunk size = 4 beats (PHY) or 2 beats (VLANE), i.e. half the 8N chunk.
+//     The 8N-alignment target is TWO chunks, so padding depends on both the
+//     chunk's internal position (beat_mod_q) AND the chunk-parity counter
+//     (chunk_parity_q: 0 = an even number of chunks already complete,
+//      1 = an odd number complete).
+//     Odd rem -> error_flag = 1.
 //
-//   virtual_lane_en halves the chunk size (1 beat == 2 samples).
+//   virtual_lane_en halves the chunk size (1 beat == 2 samples). VLANE only
+//   captures tail_buf[0] (a single beat carries both Cn and Cn+1), so replay
+//   repeats tail_buf[0] for every pad beat.
 //
 // Coding style applied (see feedback_coding_style.md):
-//   - Explicit FSM encoding {S_IDLE, S_INPUT, S_PAD, S_PHASE2}; all legacy
-//     flag combos (pad_active_q + phase2_active_q + prev_valid_q) are now
-//     captured by `align_state`.
+//   - Explicit FSM encoding {S_IDLE, S_INPUT, S_PAD}.
 //   - Two-process FSM: sequential always just does state <= next_state.
-//   - One always per related signal group (tail_buf, beat_mod_q, pad_left_q,
-//     phase2_left_q, replay_idx_q, error_flag, dout_vec, valid_out).
+//   - One always per related signal group.
 //   - No leading default inside shared always blocks; every branch lists
 //     the value explicitly.
 //   - Signals that own a dedicated always only enumerate the conditions
 //     that actually update them (no forced else).
-//   - Implicit if-else-chain guards from the legacy mega-always are lifted
-//     into explicit wires (fresh_burst, burst_end, chunk_beat_0, ...) so
-//     the distributed always blocks share the same gating.
+//   - Implicit if-else-chain guards from legacy mega-always are lifted into
+//     explicit wires (fresh_burst, burst_end_pulse, first_pad_beat, ...).
 //   - Async-low reset + block label on every always.
 // =============================================================================
 
@@ -69,10 +73,9 @@ module lanedata_8n_align_process (
     // -------------------------------------------------------------------------
     // FSM encoding
     // -------------------------------------------------------------------------
-    localparam [1:0] S_IDLE   = 2'd0;  // no valid, no padding, no phase2
-    localparam [1:0] S_INPUT  = 2'd1;  // valid_in=1, passing-through input
-    localparam [1:0] S_PAD    = 2'd2;  // emitting replay pad (8N replay or 4N phase1)
-    localparam [1:0] S_PHASE2 = 2'd3;  // 4N phase2 zero fill
+    localparam [1:0] S_IDLE  = 2'd0;  // no valid, no padding
+    localparam [1:0] S_INPUT = 2'd1;  // valid_in=1, passing input through
+    localparam [1:0] S_PAD   = 2'd2;  // emitting replay pad
 
     // =========================================================================
     // Input fan-in (comb bus aggregation)
@@ -109,7 +112,6 @@ module lanedata_8n_align_process (
     end
 
     wire fresh_burst = valid_in & ~prev_valid_q;
-    wire burst_end   = prev_valid_q & ~valid_in;
 
     // =========================================================================
     // FSM: align_state (two-process)
@@ -117,34 +119,26 @@ module lanedata_8n_align_process (
     reg [1:0] align_state;
     reg [1:0] align_state_d;
 
-    // Forward declarations (counters used by FSM transition):
     reg [2:0] beat_mod_q;
+    reg       chunk_parity_q;
     reg [2:0] pad_left_q;
-    reg [2:0] phase2_left_q;
 
-    // rem_now = beats already consumed in the current chunk (beat_mod_q wraps
-    // at chunk boundary so this is a direct count).
+    // rem_now : beats already consumed in the current chunk (beat_mod_q wraps
+    // at chunk boundary, so this is a direct count).
     wire [2:0] rem_now = beat_mod_q;
 
-    // How many pad beats the burst-end decision needs to emit.
-    // pad_total covers 8N replay pads and 4N phase1 pads; the numbers
-    // differ per mode/rem but the dispatcher is a single function.
+    // pad_total_d : total pad beats required to reach the 8-sample alignment.
+    //   8N modes: pad only to fill the current chunk.
+    //   4N modes: pad depends on (rem_now, chunk_parity_q) - see spec above.
+    // rem_is_odd_d : flags the odd-rem error (for error_flag).
     reg [2:0] pad_total_d;
-    reg       rem_is_odd_d;     // flags error
+    reg       rem_is_odd_d;
+
     always @(*) begin : p_pad_total
         pad_total_d  = 3'd0;
         rem_is_odd_d = 1'b0;
-        if (align_mode && vlane) begin
-            // 8N VLANE: chunk = 4 beat
-            case (rem_now)
-                3'd0: pad_total_d = 3'd0;
-                3'd1: begin pad_total_d = 3'd3; rem_is_odd_d = 1'b1; end
-                3'd2: pad_total_d = 3'd2;
-                3'd3: begin pad_total_d = 3'd1; rem_is_odd_d = 1'b1; end
-                default: pad_total_d = 3'd0;
-            endcase
-        end else if (align_mode && !vlane) begin
-            // 8N PHY: chunk = 8 beat
+        if (align_mode && !vlane) begin
+            // 8N PHY: chunk = 8 beats, pad to chunk boundary (8 beats).
             case (rem_now)
                 3'd0: pad_total_d = 3'd0;
                 3'd1: begin pad_total_d = 3'd7; rem_is_odd_d = 1'b1; end
@@ -156,15 +150,8 @@ module lanedata_8n_align_process (
                 3'd7: begin pad_total_d = 3'd1; rem_is_odd_d = 1'b1; end
                 default: pad_total_d = 3'd0;
             endcase
-        end else if (!align_mode && vlane) begin
-            // 4N VLANE: chunk = 2 beat
-            case (rem_now)
-                3'd0: pad_total_d = 3'd0;
-                3'd1: begin pad_total_d = 3'd1; rem_is_odd_d = 1'b1; end
-                default: pad_total_d = 3'd0;
-            endcase
-        end else begin
-            // 4N PHY: chunk = 4 beat
+        end else if (align_mode && vlane) begin
+            // 8N VLANE: chunk = 4 beats, pad to chunk boundary (4 beats).
             case (rem_now)
                 3'd0: pad_total_d = 3'd0;
                 3'd1: begin pad_total_d = 3'd3; rem_is_odd_d = 1'b1; end
@@ -172,56 +159,73 @@ module lanedata_8n_align_process (
                 3'd3: begin pad_total_d = 3'd1; rem_is_odd_d = 1'b1; end
                 default: pad_total_d = 3'd0;
             endcase
+        end else if (!align_mode && !vlane) begin
+            // 4N PHY: chunk = 4 beats, pad to TWO-chunk boundary (8 beats).
+            // parity=0 : an even number of chunks already complete -> already 8-aligned
+            //            rem=0 -> pad 0 ; rem=r -> pad (8-r) (next chunk + remaining)
+            // parity=1 : an odd number of chunks already complete -> need a 4-beat top-up
+            //            rem=0 -> pad 4 ; rem=r -> pad (4-r) (finish the current chunk)
+            if (chunk_parity_q == 1'b0) begin
+                case (rem_now)
+                    3'd0: pad_total_d = 3'd0;
+                    3'd1: begin pad_total_d = 3'd7; rem_is_odd_d = 1'b1; end
+                    3'd2: pad_total_d = 3'd6;
+                    3'd3: begin pad_total_d = 3'd5; rem_is_odd_d = 1'b1; end
+                    default: pad_total_d = 3'd0;
+                endcase
+            end else begin
+                case (rem_now)
+                    3'd0: pad_total_d = 3'd4;
+                    3'd1: begin pad_total_d = 3'd3; rem_is_odd_d = 1'b1; end
+                    3'd2: pad_total_d = 3'd2;
+                    3'd3: begin pad_total_d = 3'd1; rem_is_odd_d = 1'b1; end
+                    default: pad_total_d = 3'd0;
+                endcase
+            end
+        end else begin
+            // 4N VLANE: chunk = 2 beats, pad to TWO-chunk boundary (4 beats).
+            // parity=0: already 4-aligned. rem=0 -> pad 0 ; rem=1 -> pad 3 (err)
+            // parity=1: one chunk complete. rem=0 -> pad 2 ; rem=1 -> pad 1 (err)
+            if (chunk_parity_q == 1'b0) begin
+                case (rem_now)
+                    3'd0: pad_total_d = 3'd0;
+                    3'd1: begin pad_total_d = 3'd3; rem_is_odd_d = 1'b1; end
+                    default: pad_total_d = 3'd0;
+                endcase
+            end else begin
+                case (rem_now)
+                    3'd0: pad_total_d = 3'd2;
+                    3'd1: begin pad_total_d = 3'd1; rem_is_odd_d = 1'b1; end
+                    default: pad_total_d = 3'd0;
+                endcase
+            end
         end
     end
 
-    // Phase2 beat count for 4N mode (after phase1 pad, or directly if rem==0).
-    wire [2:0] phase2_count_full = vlane ? 3'd2 : 3'd4;
-
-    // Next-state decision logic.
-    // Key transitions:
-    //   Any state + valid_in=1                 -> S_INPUT
-    //   S_INPUT + burst_end + needs pad        -> S_PAD (if pad_total > 0)
-    //                                           OR S_PHASE2 (4N rem==0)
-    //                                           OR S_IDLE (8N rem==0)
-    //   S_PAD   + pad_left_q==1 + align_mode=1 -> S_IDLE    (8N pad done)
-    //   S_PAD   + pad_left_q==1 + align_mode=0 -> S_PHASE2  (4N pad->phase2)
-    //   S_PHASE2 + phase2_left_q==1            -> S_IDLE
-    //   S_IDLE                                  -> S_IDLE
+    // -------------------------------------------------------------------------
+    // Next-state logic
+    //   Any state + valid_in=1                            -> S_INPUT
+    //   S_INPUT + burst_end + pad_total==0                -> S_IDLE
+    //   S_INPUT + burst_end + pad_total==1                -> S_IDLE (single pad
+    //                                                        beat emitted this cycle)
+    //   S_INPUT + burst_end + pad_total>=2                -> S_PAD
+    //   S_PAD   + pad_left_q==1                           -> S_IDLE
+    //   S_PAD   + pad_left_q >1                           -> S_PAD
+    //   S_IDLE                                            -> S_IDLE
+    // -------------------------------------------------------------------------
     always @(*) begin : p_align_state_d
         if (valid_in) begin
             align_state_d = S_INPUT;
         end else begin
             case (align_state)
                 S_INPUT: begin
-                    // burst_end implicit (valid_in==0, last state was INPUT)
-                    // If pad_total <= 1, the first (and only) pad beat is
-                    // emitted in THIS cycle, so next state skips S_PAD.
-                    if (align_mode) begin
-                        // 8N
-                        if (pad_total_d == 3'd0)      align_state_d = S_IDLE;
-                        else if (pad_total_d == 3'd1) align_state_d = S_IDLE;
-                        else                          align_state_d = S_PAD;
-                    end else begin
-                        // 4N
-                        if (pad_total_d == 3'd0)      align_state_d = S_PHASE2;
-                        else if (pad_total_d == 3'd1) align_state_d = S_PHASE2;
-                        else                          align_state_d = S_PAD;
-                    end
+                    if (pad_total_d == 3'd0)      align_state_d = S_IDLE;
+                    else if (pad_total_d == 3'd1) align_state_d = S_IDLE;
+                    else                          align_state_d = S_PAD;
                 end
                 S_PAD: begin
-                    // pad_left_q was loaded to pad_total - 1. Exit when it
-                    // reaches 0 (last pad beat emitted this cycle).
-                    if (pad_left_q == 3'd1) begin
-                        if (align_mode)               align_state_d = S_IDLE;
-                        else                          align_state_d = S_PHASE2;
-                    end else begin
-                        align_state_d = S_PAD;
-                    end
-                end
-                S_PHASE2: begin
-                    if (phase2_left_q == 3'd1)        align_state_d = S_IDLE;
-                    else                              align_state_d = S_PHASE2;
+                    if (pad_left_q == 3'd1)       align_state_d = S_IDLE;
+                    else                          align_state_d = S_PAD;
                 end
                 default: begin
                     align_state_d = S_IDLE;
@@ -235,56 +239,72 @@ module lanedata_8n_align_process (
         else        align_state <= align_state_d;
     end
 
-    // Convenience wires for other signals to depend on the FSM cleanly.
-    wire entering_input  = (align_state_d == S_INPUT);
-    wire entering_pad    = (align_state_d == S_PAD);
-    wire entering_phase2 = (align_state_d == S_PHASE2);
-    wire in_input        = (align_state   == S_INPUT);
-    wire in_pad          = (align_state   == S_PAD);
-    wire in_phase2       = (align_state   == S_PHASE2);
-    wire burst_end_pulse = in_input & ~valid_in;  // the cycle where burst ends
-
-    // First pad beat is emitted on the burst_end cycle itself (FSM transitions
-    // S_INPUT -> S_PAD same cycle). After that the S_PAD state covers the rest.
+    // Convenience wires
+    wire in_input        = (align_state == S_INPUT);
+    wire in_pad          = (align_state == S_PAD);
+    wire burst_end_pulse = in_input & ~valid_in;
     wire first_pad_beat  = burst_end_pulse & (pad_total_d != 3'd0);
-    // First phase2 beat (when rem==0 in 4N, we go straight to phase2 with no pad).
-    wire first_phase2_beat_no_pad = burst_end_pulse & ~align_mode & (pad_total_d == 3'd0);
 
     // =========================================================================
-    // beat_mod_q : input beat position within chunk (mod chunk_size)
-    //   fresh_burst: load 1 (we're consuming beat 0 right now)
-    //   valid_in continuing: wrap-increment by mode-dependent chunk size
-    //   pad_left==1 transitioning out of S_PAD with 8N, or phase2 end: 0
+    // beat_mod_q : input beat position within the current chunk (wraps)
+    //   fresh_burst              : 1 (we are consuming beat 0 right now)
+    //   valid_in continuing      : mode-dependent wrap-increment
+    //   on the last pad beat     : 0 (chunk is resolved)
+    //   otherwise                : hold
     // =========================================================================
     wire [2:0] beat_mod_wrap =
-          (align_mode && !vlane) ? ((beat_mod_q == 3'd7) ? 3'd0 : beat_mod_q + 3'd1) :
-          (align_mode &&  vlane) ? ((beat_mod_q == 3'd3) ? 3'd0 : beat_mod_q + 3'd1) :
+          (align_mode && !vlane)  ? ((beat_mod_q == 3'd7) ? 3'd0 : beat_mod_q + 3'd1) :
+          (align_mode &&  vlane)  ? ((beat_mod_q == 3'd3) ? 3'd0 : beat_mod_q + 3'd1) :
           (!align_mode && !vlane) ? ((beat_mod_q == 3'd3) ? 3'd0 : beat_mod_q + 3'd1) :
                                     ((beat_mod_q == 3'd1) ? 3'd0 : beat_mod_q + 3'd1);
 
-    wire pad_last_beat_8n = in_pad & (pad_left_q == 3'd1) & align_mode;
-    wire pad_first_is_last_8n = first_pad_beat & (pad_total_d == 3'd1) & align_mode;
-    wire phase2_last_beat = in_phase2 & (phase2_left_q == 3'd1);
+    // Did the "current" input beat wrap the chunk?
+    wire input_chunk_wrap =
+          valid_in & ~fresh_burst &
+          ( (align_mode && !vlane  && beat_mod_q == 3'd7) |
+            (align_mode &&  vlane  && beat_mod_q == 3'd3) |
+            (!align_mode && !vlane && beat_mod_q == 3'd3) |
+            (!align_mode &&  vlane && beat_mod_q == 3'd1) );
+
+    wire pad_last_beat = in_pad & (pad_left_q == 3'd1);
+    wire pad_first_is_last = first_pad_beat & (pad_total_d == 3'd1);
 
     always @(posedge clk or negedge rst_n) begin : p_beat_mod
-        if (!rst_n)                      beat_mod_q <= 3'd0;
-        else if (fresh_burst)            beat_mod_q <= 3'd1;
-        else if (valid_in)               beat_mod_q <= beat_mod_wrap;
-        else if (pad_last_beat_8n)       beat_mod_q <= 3'd0;
-        else if (pad_first_is_last_8n)   beat_mod_q <= 3'd0;
-        else if (phase2_last_beat)       beat_mod_q <= 3'd0;
+        if (!rst_n)                    beat_mod_q <= 3'd0;
+        else if (fresh_burst)          beat_mod_q <= 3'd1;
+        else if (valid_in)             beat_mod_q <= beat_mod_wrap;
+        else if (pad_last_beat)        beat_mod_q <= 3'd0;
+        else if (pad_first_is_last)    beat_mod_q <= 3'd0;
+    end
+
+    // =========================================================================
+    // chunk_parity_q : counts chunks mod 2 (only meaningful in 4N modes).
+    //   fresh_burst : 0
+    //   input_chunk_wrap : toggle (a chunk just completed via input)
+    //   first_pad_beat + (pad_total filled the current chunk) : toggle
+    //     - If the pad ends up completing both chunks (reaches 8-alignment),
+    //       parity stays at whatever it should be for the next burst (0).
+    //   For simplicity we only toggle on input_chunk_wrap; the parity is
+    //   only read at burst_end_pulse, which is evaluated BEFORE any pad is
+    //   emitted, so the input-driven parity is the correct value at that
+    //   decision point.
+    //   After burst completion we reset parity on the next fresh_burst.
+    // =========================================================================
+    always @(posedge clk or negedge rst_n) begin : p_chunk_parity
+        if (!rst_n)                 chunk_parity_q <= 1'b0;
+        else if (fresh_burst)       chunk_parity_q <= 1'b0;
+        else if (input_chunk_wrap)  chunk_parity_q <= ~chunk_parity_q;
     end
 
     // =========================================================================
     // tail_buf[0] (Cn) and tail_buf[1] (Cn+1)
-    // Written only when input arrives at chunk beat 0 / beat 1.
     //   PHY:
-    //     8N: tb0 at beat_mod_q==0, tb1 at beat_mod_q==1
-    //     4N: tb0 at beat_mod_q[1:0]==0, tb1 at beat_mod_q[1:0]==1
-    //   VLANE: only tb0 (1 beat carries both Cn and Cn+1 samples)
-    //     8N: tb0 at beat_mod_q[1:0]==0
-    //     4N: tb0 at beat_mod_q[0]==0
-    // Fresh burst: tb0 <= current din (it is the first beat of the chunk).
+    //     8N:       tb0 at beat_mod_q==0, tb1 at beat_mod_q==1
+    //     4N:       tb0 at beat_mod_q[1:0]==0, tb1 at beat_mod_q[1:0]==1
+    //   VLANE: only tb0 (one beat carries both samples)
+    //     8N:       tb0 at beat_mod_q[1:0]==0
+    //     4N:       tb0 at beat_mod_q[0]==0
+    //   Fresh burst: tb0 <= current din (first beat of chunk).
     // =========================================================================
     wire tb0_cond_phy   = align_mode ? (beat_mod_q == 3'd0)
                                      : (beat_mod_q[1:0] == 2'd0);
@@ -321,9 +341,10 @@ module lanedata_8n_align_process (
     end
 
     // =========================================================================
-    // pad_left_q : countdown for S_PAD state
-    //   Loaded on burst_end when entering S_PAD: pad_total_d - 1
-    //   Decremented each S_PAD cycle
+    // pad_left_q : countdown during S_PAD
+    //   Loaded on first_pad_beat : pad_total_d - 1 (this cycle emits the first
+    //     pad beat, so remaining = total - 1).
+    //   Decremented each S_PAD cycle.
     // =========================================================================
     always @(posedge clk or negedge rst_n) begin : p_pad_left
         if (!rst_n)                pad_left_q <= 3'd0;
@@ -333,43 +354,24 @@ module lanedata_8n_align_process (
     end
 
     // =========================================================================
-    // phase2_left_q : countdown for S_PHASE2 state
-    //   Loaded when entering S_PHASE2:
-    //     From S_PAD (pad_left==1, 4N): phase2_count_full - 1 (since THIS cycle
-    //       is still a pad beat, not a phase2 beat; decrement starts next cycle)
-    //     Direct from burst_end rem==0 (4N): phase2_count_full - 1 (one phase2
-    //       beat already emitted on the burst_end cycle)
-    // =========================================================================
-    wire pad_to_phase2 = in_pad & (pad_left_q == 3'd1) & ~align_mode;
-    wire pad_first_is_last_4n = first_pad_beat & (pad_total_d == 3'd1) & ~align_mode;
-
-    always @(posedge clk or negedge rst_n) begin : p_phase2_left
-        if (!rst_n)                            phase2_left_q <= 3'd0;
-        else if (pad_first_is_last_4n)         phase2_left_q <= phase2_count_full;
-        else if (pad_to_phase2)                phase2_left_q <= phase2_count_full;
-        else if (first_phase2_beat_no_pad)     phase2_left_q <= phase2_count_full - 3'd1;
-        else if (in_phase2 & (phase2_left_q != 3'd0))
-                                               phase2_left_q <= phase2_left_q - 3'd1;
-    end
-
-    // =========================================================================
     // replay_idx_q : toggles between tail_buf[0] and tail_buf[1] during S_PAD
-    //   VLANE: always 0 (single beat carries both samples)
-    //   PHY: burst_end loads 1 (first pad is tb0, second pad is tb1), then
-    //        toggles each S_PAD cycle
+    //   VLANE: always 0 (single beat carries both samples).
+    //   PHY:
+    //     first_pad_beat loads 1 (first pad = tb0 this cycle, next pad = tb1).
+    //     in_pad continuing : toggle.
     // =========================================================================
     reg replay_idx_q;
     always @(posedge clk or negedge rst_n) begin : p_replay_idx
-        if (!rst_n)               replay_idx_q <= 1'b0;
-        else if (first_pad_beat)  replay_idx_q <= vlane ? 1'b0 : 1'b1;
-        else if (in_pad)          replay_idx_q <= vlane ? 1'b0 : ~replay_idx_q;
+        if (!rst_n)              replay_idx_q <= 1'b0;
+        else if (first_pad_beat) replay_idx_q <= vlane ? 1'b0 : 1'b1;
+        else if (in_pad)         replay_idx_q <= vlane ? 1'b0 : ~replay_idx_q;
     end
 
     // =========================================================================
-    // error_flag (single reg, self-sticky)
-    //   fresh_burst: clear
-    //   burst_end with rem_is_odd_d: set
-    //   otherwise: hold
+    // error_flag (self-sticky output)
+    //   fresh_burst                 : clear
+    //   burst_end + rem_is_odd_d    : set
+    //   else                        : hold
     // =========================================================================
     always @(posedge clk or negedge rst_n) begin : p_error_flag
         if (!rst_n)                              error_flag <= 1'b0;
@@ -378,32 +380,26 @@ module lanedata_8n_align_process (
     end
 
     // =========================================================================
-    // valid_out : high for every cycle that emits a real beat
-    //   valid_in=1                       : input beat            (S_INPUT)
-    //   first_pad_beat                   : first pad beat        (S_INPUT -> S_PAD)
-    //   first_phase2_beat_no_pad         : direct phase2 start   (S_INPUT -> S_PHASE2)
-    //   in_pad                           : pad continuation      (S_PAD)
-    //   in_phase2                        : phase2 continuation   (S_PHASE2)
-    //   else                             : 0
+    // valid_out : asserted while we have a real beat to emit.
+    //   valid_in=1 (pass-through)            : 1
+    //   first_pad_beat (burst_end -> S_PAD)  : 1
+    //   in_pad                               : 1
+    //   otherwise                            : 0
     // =========================================================================
     always @(posedge clk or negedge rst_n) begin : p_valid_out
         if (!rst_n)                              valid_out <= 1'b0;
         else if (valid_in)                       valid_out <= 1'b1;
         else if (first_pad_beat)                 valid_out <= 1'b1;
-        else if (first_phase2_beat_no_pad)       valid_out <= 1'b1;
         else if (in_pad)                         valid_out <= 1'b1;
-        else if (in_phase2)                      valid_out <= 1'b1;
         else                                     valid_out <= 1'b0;
     end
 
     // =========================================================================
-    // dout_vec : per-cycle payload select
-    //   valid_in=1 (S_INPUT input beat): pass through din
-    //   first_pad_beat (burst_end -> S_PAD same cycle): tail_buf[0]
-    //   first_phase2_beat_no_pad: zeros
-    //   in_pad continuing: tail_buf[replay_idx_q]
-    //   in_phase2 continuing: zeros
-    //   else: zeros
+    // dout_vec : per-cycle payload
+    //   valid_in=1            : pass-through din
+    //   first_pad_beat        : tail_buf[0]   (PHY & VLANE same)
+    //   in_pad                : tail_buf[replay_idx_q]
+    //   else                  : 0
     // =========================================================================
     reg [DATA_W-1:0] dout_vec [0:15];
     integer i_do;
@@ -418,15 +414,9 @@ module lanedata_8n_align_process (
         end else if (first_pad_beat) begin
             for (i_do = 0; i_do < 16; i_do = i_do + 1)
                 dout_vec[i_do] <= tail_buf[0][i_do];
-        end else if (first_phase2_beat_no_pad) begin
-            for (i_do = 0; i_do < 16; i_do = i_do + 1)
-                dout_vec[i_do] <= {DATA_W{1'b0}};
         end else if (in_pad) begin
             for (i_do = 0; i_do < 16; i_do = i_do + 1)
                 dout_vec[i_do] <= tail_buf[replay_idx_q][i_do];
-        end else if (in_phase2) begin
-            for (i_do = 0; i_do < 16; i_do = i_do + 1)
-                dout_vec[i_do] <= {DATA_W{1'b0}};
         end else begin
             for (i_do = 0; i_do < 16; i_do = i_do + 1)
                 dout_vec[i_do] <= {DATA_W{1'b0}};
