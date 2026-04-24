@@ -132,6 +132,21 @@ module reverse_inplace_transpose (
     reg [2:0]  vl4_base_row;    // 0 or 2
     reg [2:0]  vl4_base_col;    // 0, 2, 4, or 6
 
+    // =========================================================================
+    // Fresh-burst edge detection + effective write-address wires
+    //   Declared here (before the VLANE-decode comb block) so strict parsers
+    //   see vl_beat_eff / wr_row_eff / wr_sel_eff / l4_beat_eff as declared
+    //   at their first use.
+    // =========================================================================
+    wire fresh_burst = valid_in & ~prev_valid;
+
+    // Effective write address: on fresh_burst, force row=0, sel=0, beat=0
+    // because the NBA for wr_row/wr_sel/vl_beat hasn't taken effect yet.
+    wire [2:0] wr_row_eff  = fresh_burst ? 3'd0 : wr_row;
+    wire       wr_sel_eff  = fresh_burst ? 1'b0 : wr_sel;
+    wire [2:0] vl_beat_eff = fresh_burst ? 3'd0 : vl_beat;
+    wire       l4_beat_eff = fresh_burst ? 1'b0 : l4_beat;
+
     // Use vl_beat_eff so fresh_burst cycle sees beat=0 decode, not stale beat.
     always @(*) begin
         if (lane_cfg == LANE8) begin
@@ -149,18 +164,6 @@ module reverse_inplace_transpose (
         vl4_base_row = {vl_beat_eff[1], 1'b0};               // 0 or 2
         vl4_base_col = {vl_beat_eff[2], vl_beat_eff[0], 1'b0};   // 0, 2, 4, 6
     end
-
-    // =========================================================================
-    // Fresh-burst edge detection
-    // =========================================================================
-    wire fresh_burst = valid_in & ~prev_valid;
-
-    // Effective write address: on fresh_burst, force row=0, sel=0, beat=0
-    // because the NBA for wr_row/wr_sel/vl_beat hasn't taken effect yet.
-    wire [2:0] wr_row_eff  = fresh_burst ? 3'd0 : wr_row;
-    wire       wr_sel_eff  = fresh_burst ? 1'b0 : wr_sel;
-    wire [2:0] vl_beat_eff = fresh_burst ? 3'd0 : vl_beat;
-    wire       l4_beat_eff = fresh_burst ? 1'b0 : l4_beat;
 
     // =========================================================================
     // Write completion detection

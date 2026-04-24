@@ -235,20 +235,41 @@ module inplace_transpose_buf_8lane_2beat (
     reg [3:0] bank_row_rd;
     reg [3:0] bank_row_rd_d;
 
+    // Bank-level status (declared here so forward references below compile
+    // under strict Verilog parsers; update logic is further down).
+    reg        bank_full      [0:1];
+    reg [3:0]  bank_rows_used [0:1];
+
     // VLANE warm-up guard: in VLANE mode, reader cannot leave IDLE until the
-    // second chunk's commit has fired (init_done_4vlane_d captures the "this
-    // cycle saw the second commit" condition).
+    // second chunk's commit has fired.
     wire read_allowed = (mode == MODE_PHY) | init_done_4vlane;
 
+    // Dynamic-index helpers expressed as explicit 2:1 muxes. Some synthesis
+    // / lint tools struggle with `array[wire]` inside comb expressions, so
+    // we lift the select out manually.
+    wire [3:0] bank_rows_used_rd = (rd_bank == 1'b0) ? bank_rows_used[0]
+                                                     : bank_rows_used[1];
+    wire       bank_full_rd      = (rd_bank == 1'b0) ? bank_full[0]
+                                                     : bank_full[1];
+    wire       bank_full_other   = (rd_bank == 1'b0) ? bank_full[1]
+                                                     : bank_full[0];
+
     // Whether the current row being emitted is the last row of rd_bank.
-    wire last_row_of_bank = (bank_row_rd + 4'd1 == bank_rows_used[rd_bank]);
+    wire last_row_of_bank = (bank_row_rd + 4'd1 == bank_rows_used_rd);
+
+    // Helper: does the other bank hold data the reader could continue with
+    // after finishing the current bank? Used by FSM and LANE4 to decide
+    // whether to return to IDLE or stay in DRAIN after a bank transition.
+    wire bank_full_after_drain_complete = bank_full_other;
+    wire l4_more_rows_available         = (!last_row_of_bank)
+                                          | bank_full_after_drain_complete;
 
     // FSM next-state
     always @(*) begin : p_r_state_d
         case (r_state)
             R_IDLE: begin
-                if (bank_full[rd_bank] & read_allowed) r_state_d = R_DRAIN;
-                else                                   r_state_d = R_IDLE;
+                if (bank_full_rd & read_allowed) r_state_d = R_DRAIN;
+                else                             r_state_d = R_IDLE;
             end
             R_DRAIN: begin
                 if (lane_cfg == LANE8) begin
@@ -311,15 +332,14 @@ module inplace_transpose_buf_8lane_2beat (
     end
 
     // -------------------------------------------------------------------------
-    // bank_full[0..1] + bank_rows_used[0..1]
+    // bank_full[0..1] + bank_rows_used[0..1] - update logic
+    // (reg declarations themselves live up in the read-side block so forward
+    // references compile under strict parsers.)
     // Writer SET fires on chunk_commit targeting wr_bank.
     // Reader CLR fires on bank_finish targeting rd_bank.
     // Same-cycle set-wins-over-clear (guarantees a freshly committed chunk
     // is never erased by a coincident drain-complete on the opposite bank).
     // -------------------------------------------------------------------------
-    reg        bank_full      [0:1];
-    reg [3:0]  bank_rows_used [0:1];
-
     wire       wr_set_b0      = chunk_commit & (wr_bank == 1'b0);
     wire       wr_set_b1      = chunk_commit & (wr_bank == 1'b1);
     wire [3:0] wr_rows_commit = (mode == MODE_PHY) ? active_lanes : active_vlanes;
@@ -353,13 +373,6 @@ module inplace_transpose_buf_8lane_2beat (
         else if (wr_set_b1)   bank_rows_used[1] <= wr_rows_commit;
         else if (rd_clr_b1)   bank_rows_used[1] <= 4'd0;
     end
-
-    // Helper: does the other bank hold data the reader could continue with
-    // after finishing the current bank? Used by FSM and LANE4 to decide
-    // whether to return to IDLE or stay in DRAIN after a bank transition.
-    wire bank_full_after_drain_complete = bank_full[~rd_bank];
-    wire l4_more_rows_available         = (!last_row_of_bank)
-                                          | bank_full_after_drain_complete;
 
     // =========================================================================
     // Output path: dout_top / dout_bot / valid_out / cur_chunk
